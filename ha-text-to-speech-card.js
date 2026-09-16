@@ -66,11 +66,18 @@
  * position support is inconsistent across different media_player
  * integrations, while "replay this chunk" behaves identically on any of
  * them. Advancing to the next chunk automatically is done by watching the
- * target media_player's own state go from "playing" back to something
- * else, not a timer.
+ * target media_player's own state, backed by a short timer: some
+ * media_player integrations (including custom browser-based speakers)
+ * never reliably report a literal "playing" state, so waiting forever to
+ * observe one before honoring "it stopped" would leave playback stuck
+ * needing a manual Next click for every remaining chunk. Instead there's a
+ * brief grace period after a chunk starts (so a not-yet-started player
+ * isn't mistaken for a finished one), a longer startup window after which
+ * a never-seen "playing" state is trusted anyway, and an outer max-wait so
+ * a stuck-reporting player can't hang the sequence indefinitely.
  */
 
-const CARD_VERSION = "2026.09.16.2";
+const CARD_VERSION = "2026.09.16.3";
 
 console.info(
   `%c TEXT-TO-SPEECH-CARD %c ${CARD_VERSION} `,
@@ -211,6 +218,13 @@ function groupIntoChunks(sentences, sentencesPerChunk) {
 const DEFAULT_WORDS_PER_CHUNK = 40;
 const DEFAULT_SENTENCES_PER_CHUNK = 2;
 
+// Auto-advance timing for chunked playback - see the header comment above
+// for why this is time-based rather than purely state-pulse-based.
+const CHUNK_START_GRACE_MS = 1500; // never trust a "not playing" reading before this
+const CHUNK_STARTUP_TIMEOUT_MS = 6000; // give up waiting for a "playing" pulse after this
+const CHUNK_MAX_WAIT_MS = 45000; // force-advance regardless, so a stuck player can't hang
+const CHUNK_POLL_MS = 1000; // periodic backstop check, independent of hass push events
+
 function defaultChunkSize(splitBy) {
   return splitBy === "sentences" ? DEFAULT_SENTENCES_PER_CHUNK : DEFAULT_WORDS_PER_CHUNK;
 }
@@ -338,7 +352,11 @@ class HaTextToSpeechCard extends HTMLElement {
     this._hass = hass;
     this._render();
     this._updateStatus();
-    this._watchChunkPlayback();
+    this._checkChunkFinished();
+  }
+
+  disconnectedCallback() {
+    this._stopChunkTimer();
   }
 
   getCardSize() {
@@ -600,8 +618,9 @@ class HaTextToSpeechCard extends HTMLElement {
     this._chunkQueue = null;
     this._chunkIndex = 0;
     this._chunkState = "idle";
-    this._chunkAwaitingStart = false;
-    this._lastTargetPlayerState = null;
+    this._chunkStartedAt = null;
+    this._chunkObservedPlaying = false;
+    this._chunkPollTimer = null;
     this._targetName = this.shadowRoot.getElementById("target-name");
     this._keepTextCheckbox = this.shadowRoot.getElementById("keep-text");
     this._keepTextCheckbox.checked = this._config.keep_text === true;
@@ -1025,9 +1044,9 @@ class HaTextToSpeechCard extends HTMLElement {
     if (Object.keys(options).length) data.options = options;
 
     this._chunkState = "playing";
-    this._chunkAwaitingStart = true;
-    const targetState = this._hass.states[this._config.entity];
-    this._lastTargetPlayerState = targetState ? targetState.state : null;
+    this._chunkStartedAt = Date.now();
+    this._chunkObservedPlaying = false;
+    this._startChunkTimer();
     this._updateChunkButtonLabel();
     this._renderChunkControls();
 
@@ -1041,9 +1060,10 @@ class HaTextToSpeechCard extends HTMLElement {
 
   async _pauseChunks() {
     if (this._chunkState !== "playing") return;
-    // flip state before the (async) stop call so the hass-driven watcher
-    // below sees we're intentionally paused, not that the chunk finished
+    // flip state before the (async) stop call so the finish-checker below
+    // sees we're intentionally paused, not that the chunk finished
     this._chunkState = "paused";
+    this._stopChunkTimer();
     this._updateChunkButtonLabel();
     this._renderChunkControls();
     if (!this._hass || !this._config || !this._config.entity) return;
@@ -1087,7 +1107,9 @@ class HaTextToSpeechCard extends HTMLElement {
     this._chunkQueue = null;
     this._chunkIndex = 0;
     this._chunkState = "idle";
-    this._chunkAwaitingStart = false;
+    this._stopChunkTimer();
+    this._chunkStartedAt = null;
+    this._chunkObservedPlaying = false;
     this._updateChunkButtonLabel();
     this._renderChunkControls();
     if (this._keepTextCheckbox && !this._keepTextCheckbox.checked) {
@@ -1100,7 +1122,9 @@ class HaTextToSpeechCard extends HTMLElement {
     this._chunkQueue = null;
     this._chunkIndex = 0;
     this._chunkState = "idle";
-    this._chunkAwaitingStart = false;
+    this._stopChunkTimer();
+    this._chunkStartedAt = null;
+    this._chunkObservedPlaying = false;
     this._updateChunkButtonLabel();
     this._renderChunkControls();
     if (!this._hass || !this._config || !this._config.entity) return;
@@ -1116,27 +1140,46 @@ class HaTextToSpeechCard extends HTMLElement {
     }
   }
 
-  // Called on every hass update. hass updates on every entity state change
-  // anywhere in the system, which is how this notices the target speaker's
-  // own state moving from "playing" to something else - that's the signal
-  // a chunk finished naturally and it's time to auto-advance.
-  _watchChunkPlayback() {
+  _startChunkTimer() {
+    this._stopChunkTimer();
+    this._chunkPollTimer = setInterval(() => this._checkChunkFinished(), CHUNK_POLL_MS);
+  }
+
+  _stopChunkTimer() {
+    if (this._chunkPollTimer) {
+      clearInterval(this._chunkPollTimer);
+      this._chunkPollTimer = null;
+    }
+  }
+
+  // Called on every hass update (hass updates on every entity state change
+  // anywhere in the system) and on a periodic poll as a backstop. See the
+  // header comment for why this leans on elapsed time rather than only
+  // waiting to observe a literal "playing" state - some media_player
+  // integrations never report one reliably, which used to leave auto-
+  // advance stuck needing a manual click for every remaining chunk.
+  _checkChunkFinished() {
     if (!this._chunkQueue || this._chunkState !== "playing") return;
     if (!this._config || !this._config.entity || !this._hass) return;
+
+    const elapsed = Date.now() - (this._chunkStartedAt || 0);
+    if (elapsed < CHUNK_START_GRACE_MS) return; // too early to judge - still starting up
+
     const state = this._hass.states[this._config.entity];
     const current = state ? state.state : null;
-    const prev = this._lastTargetPlayerState;
-    this._lastTargetPlayerState = current;
 
     if (current === "playing") {
-      this._chunkAwaitingStart = false; // confirmed this chunk actually started
+      this._chunkObservedPlaying = true;
+      // stuck reporting "playing" way past any reasonable chunk length -
+      // don't let it hang the whole sequence
+      if (elapsed > CHUNK_MAX_WAIT_MS) this._advanceChunk();
       return;
     }
-    // still waiting for it to even start (HA is synthesizing) - a
-    // transient non-"playing" state here doesn't mean it's already done
-    if (this._chunkAwaitingStart) return;
 
-    if (prev === "playing" && current !== "playing") {
+    // not "playing" right now - trust it once we've either seen this chunk
+    // actually start playing at some point, or given up waiting for that
+    // pulse (this integration may never send one)
+    if (this._chunkObservedPlaying || elapsed > CHUNK_STARTUP_TIMEOUT_MS) {
       this._advanceChunk();
     }
   }

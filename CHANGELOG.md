@@ -2,6 +2,9 @@
 
 All notable changes to this card are documented here. Versions follow `YYYY.MM.DD.#`.
 
+## 2026.09.16.3
+- Fixed chunked playback not auto-advancing after a manually-navigated chunk (Previous/Next) finished, requiring a click for every remaining chunk. Auto-advance previously required observing the target media_player report a literal `playing` state before it would trust a later non-`playing` reading as "done" - some media_player integrations (including browser-based custom speakers) never report that state at all, which left the sequence permanently stuck once that happened. It's now time-based: a short grace period after a chunk starts (so a not-yet-started player isn't mistaken for a finished one), a longer window after which a never-seen `playing` state is trusted anyway, and an outer max-wait so a stuck-reporting player can't hang the sequence.
+
 ## 2026.09.16.2
 - Added optional chunked playback: split the text into chunks by word count or sentence count (your choice, in the editor) and speak them one at a time instead of waiting for the whole box to synthesize as a single clip. The Speak button becomes Pause/Resume once a sequence is running, with Previous/Next chunk controls and a "chunk N of M" indicator. Resume always replays the current chunk from its start rather than trying to resume mid-clip at an exact position, since real position-resume support varies too much across different media_player integrations to rely on - replaying the whole chunk behaves the same on any of them. Auto-advance to the next chunk is driven by watching the target speaker's own state (`playing` -> something else), not a timer.
 
