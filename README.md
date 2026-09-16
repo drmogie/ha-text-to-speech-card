@@ -6,6 +6,8 @@ A Home Assistant Lovelace card: paste or type any amount of text - no 255-charac
 
 - **No character limit.** Speaks directly through `tts.speak`'s service-call data, which (unlike an `input_text` helper's state) isn't capped at 255 characters.
 - **Read text out of an image.** A camera-icon button, drag-and-drop, and paste (Ctrl+V) all run the same on-device OCR (via [Tesseract.js](https://github.com/naptha/tesseract.js), loaded from a CDN the first time it's used) and drop the recognized text straight into the box - handy for reading a screenshot or photo of text out loud.
+- **Attach or drag-drop a text file.** A paperclip button and dragging a file onto the box both also accept plain text files (`.txt`/`.md` by default - configurable) - the file's contents replace the box, same as an OCR result does.
+- **Highlighted chunk playback.** With chunked playback on, the text box switches to a read-only view of your text with whichever chunk is currently being spoken highlighted - it switches back to a normal editable box once the sequence stops.
 - **Saved defaults, editable from the card face.** Set a default language, voice, voice-quality filter, and caching behavior in the GUI editor; a gear-icon "Quick settings" panel on the card lets you override any of them for just your next message, with a permanent "Reset to saved settings" button to snap back.
 - **Keep text after speaking.** An optional checkbox (default on the card face, with a matching saved default) leaves your text in the box instead of clearing it once spoken.
 - **Speak-button lock.** After clicking Speak, the button stays disabled for a configurable minimum time (default 2s) so a fast double-tap can't fire the same message twice.
@@ -50,6 +52,7 @@ Add a new card, search for **Text to Speech Card**, and configure it in the GUI 
 | Cache repeated messages by default | Whether repeated identical messages reuse a cached audio clip. |
 | Keep text in box after speaking by default | Whether the text box clears after a successful Speak. |
 | Lock button after Speak (seconds) | How long the Speak button stays disabled after a click, regardless of how fast the speak call itself finishes. Default 2. |
+| Attach/drag-drop text file extensions | Which file extensions the paperclip button and drag-and-drop will read as plain text and load into the box. Default `.txt, .md`. |
 | Speak in chunks | Splits the text and speaks it one chunk at a time instead of all at once, with Pause/Resume/Previous/Next controls. |
 | Split by | Words or Sentences - only shown when chunked playback is on. |
 | Words/Sentences per chunk | How many words (or sentences) go in each chunk. Defaults to 40 words or 2 sentences if left blank. |

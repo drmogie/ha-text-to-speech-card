@@ -2,6 +2,10 @@
 
 All notable changes to this card are documented here. Versions follow `YYYY.MM.DD.#`.
 
+## 2026.09.16.5
+- Added highlighted chunk playback: while a chunked sequence is running, the text box switches to a read-only view of the same text with whichever chunk is currently being spoken highlighted, and switches back to a normal editable box once the sequence stops or finishes. Editing is effectively disabled during playback as a side effect (there's no textarea to type into while the highlighted view is showing), which also keeps the chunk boundaries from drifting out of sync with the text mid-sequence.
+- Added a paperclip "attach" button next to the image button, and extended drag-and-drop, to also accept plain text files - not just images. A recognized text file's contents replace the box, same as an OCR result does. Which extensions count is configurable in the editor (`Attach/drag-drop text file extensions`, default `.txt, .md`).
+
 ## 2026.09.16.4
 - Made the chunked-playback Stop button always actually stop - it now resets state and sends `media_player.media_stop` unconditionally instead of bailing out early if its own internal bookkeeping thought there was nothing to stop, and the chunk row/indicator now re-syncs itself on every update rather than only when a chunk method happens to redraw it. Response to a report that Pause/Next/Stop all seemed unresponsive at times after `2026.09.16.3` - this closes a real gap in Stop's reliability; if Pause/Next were also affected by a stale display (row showing but out of sync with the real state), the added self-healing redraw should catch that too. Still watching for a report back to confirm this fully resolves it, since it couldn't be reproduced live from here.
 

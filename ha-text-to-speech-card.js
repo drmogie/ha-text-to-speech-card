@@ -75,9 +75,22 @@
  * isn't mistaken for a finished one), a longer startup window after which
  * a never-seen "playing" state is trusted anyway, and an outer max-wait so
  * a stuck-reporting player can't hang the sequence indefinitely.
+ *
+ * While a chunked sequence is active, the textarea is swapped out for a
+ * read-only display of the same text with the chunk currently being spoken
+ * highlighted - editing is disabled for the duration (there's no textarea
+ * to type into), which also keeps the chunk boundaries from drifting out
+ * of sync with the text mid-sequence. The textarea comes back once the
+ * sequence stops or finishes.
+ *
+ * The attach-file button (next to the image button) and dragging a file
+ * onto the text box both also accept plain text files now, not just
+ * images - a recognized text file's contents replace the box, same as an
+ * OCR result does. Which extensions count is configurable in the editor
+ * (default .txt/.md); an image drop/attach still runs OCR as before.
  */
 
-const CARD_VERSION = "2026.09.16.4";
+const CARD_VERSION = "2026.09.16.5";
 
 console.info(
   `%c TEXT-TO-SPEECH-CARD %c ${CARD_VERSION} `,
@@ -91,6 +104,13 @@ function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
   );
+}
+
+const DEFAULT_TEXT_FILE_EXTENSIONS = ".txt,.md";
+
+function fileExtension(name) {
+  const idx = String(name || "").lastIndexOf(".");
+  return idx >= 0 ? String(name).slice(idx).toLowerCase() : "";
 }
 
 function resolveTtsEntity(hass, config) {
@@ -447,6 +467,30 @@ class HaTextToSpeechCard extends HTMLElement {
         .textarea-wrap textarea {
           flex: 1;
         }
+        .chunk-display {
+          flex: 1;
+          box-sizing: border-box;
+          overflow-y: auto;
+          font-family: inherit;
+          font-size: 14px;
+          line-height: 1.5;
+          padding: 8px;
+          border-radius: 6px;
+          border: 1px solid var(--divider-color, #ccc);
+          background: var(--card-background-color, #fff);
+          color: var(--primary-text-color, #000);
+          white-space: pre-wrap;
+        }
+        .chunk-piece {
+          transition: background 0.15s ease, color 0.15s ease;
+        }
+        .chunk-piece.active {
+          background: var(--primary-color, #03a9f4);
+          color: #fff;
+          border-radius: 3px;
+          box-decoration-break: clone;
+          -webkit-box-decoration-break: clone;
+        }
         .clear-btn {
           position: absolute;
           top: 6px;
@@ -559,6 +603,7 @@ class HaTextToSpeechCard extends HTMLElement {
               id="tts-text"
               placeholder="Type or paste text to speak..."
             ></textarea>
+            <div id="chunk-display" class="chunk-display" hidden></div>
             <button id="clear-btn" class="clear-btn" type="button" title="Clear text">Clear</button>
           </div>
           <div class="row">
@@ -567,7 +612,9 @@ class HaTextToSpeechCard extends HTMLElement {
             </label>
             <div class="actions">
               <input id="image-file" type="file" accept="image/*" hidden />
+              <input id="text-file" type="file" hidden />
               <button id="image-btn" class="icon-btn" title="Read text from an image (or drag/drop or paste one into the box)">&#128247;</button>
+              <button id="attach-btn" class="icon-btn" title="Attach a text file (or drag/drop one into the box)">&#128206;</button>
               <button id="settings-toggle" class="icon-btn" title="Quick settings">&#9881;</button>
               <button id="speak-btn" class="speak-btn" type="button">Speak</button>
             </div>
@@ -613,6 +660,9 @@ class HaTextToSpeechCard extends HTMLElement {
     this._speakBtn = this.shadowRoot.getElementById("speak-btn");
     this._imageBtn = this.shadowRoot.getElementById("image-btn");
     this._imageFileInput = this.shadowRoot.getElementById("image-file");
+    this._attachBtn = this.shadowRoot.getElementById("attach-btn");
+    this._textFileInput = this.shadowRoot.getElementById("text-file");
+    this._chunkDisplay = this.shadowRoot.getElementById("chunk-display");
     this._chunkRow = this.shadowRoot.getElementById("chunk-row");
     this._chunkPrevBtn = this.shadowRoot.getElementById("chunk-prev");
     this._chunkNextBtn = this.shadowRoot.getElementById("chunk-next");
@@ -656,8 +706,17 @@ class HaTextToSpeechCard extends HTMLElement {
       this._imageFileInput.value = ""; // allow picking the same file again
       if (file) this._handleImageFile(file);
     });
+    this._attachBtn.addEventListener("click", () => {
+      this._textFileInput.accept = this._allowedTextExtensions().join(",");
+      this._textFileInput.click();
+    });
+    this._textFileInput.addEventListener("change", () => {
+      const file = this._textFileInput.files && this._textFileInput.files[0];
+      this._textFileInput.value = ""; // allow picking the same file again
+      if (file) this._handleTextFile(file);
+    });
     this._textarea.addEventListener("dragover", (ev) => {
-      if (!this._dragHasImage(ev.dataTransfer)) return;
+      if (!this._dragHasFile(ev.dataTransfer)) return;
       ev.preventDefault();
       ev.dataTransfer.dropEffect = "copy";
       this._textarea.classList.add("drag-over");
@@ -667,10 +726,21 @@ class HaTextToSpeechCard extends HTMLElement {
     });
     this._textarea.addEventListener("drop", (ev) => {
       this._textarea.classList.remove("drag-over");
-      if (!this._dragHasImage(ev.dataTransfer)) return; // let plain text/link drops behave normally
+      if (!this._dragHasFile(ev.dataTransfer)) return; // let plain text/link drops behave normally
       ev.preventDefault();
       const file = ev.dataTransfer.files && ev.dataTransfer.files[0];
-      if (file) this._handleImageFile(file);
+      if (!file) return;
+      if (file.type && file.type.startsWith("image/")) {
+        this._handleImageFile(file);
+      } else if (this._allowedTextExtensions().includes(fileExtension(file.name))) {
+        this._handleTextFile(file);
+      } else {
+        this._flashStatus(
+          `Unsupported file type - drop an image or a ${this._allowedTextExtensions().join("/")} file`,
+          true,
+          3500
+        );
+      }
     });
     this._textarea.addEventListener("paste", (ev) => {
       const items = ev.clipboardData && ev.clipboardData.items;
@@ -834,6 +904,37 @@ class HaTextToSpeechCard extends HTMLElement {
     return Array.prototype.includes.call(dataTransfer.types || [], "Files");
   }
 
+  // Broader than _dragHasImage - claims the drag for ANY file (image or
+  // not) so dragover can preventDefault and show the drop affordance. The
+  // browser doesn't expose a dragged file's NAME (only its MIME type,
+  // which is unreliable for something like .md) until the actual drop, so
+  // the real image-vs-text-vs-unsupported decision happens in the drop
+  // handler itself, not here.
+  _dragHasFile(dataTransfer) {
+    if (!dataTransfer) return false;
+    const items = dataTransfer.items;
+    if (items && items.length) {
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].kind === "file") return true;
+      }
+      return false;
+    }
+    return Array.prototype.includes.call(dataTransfer.types || [], "Files");
+  }
+
+  // Config-driven allow-list for the attach button / drag-drop text-file
+  // path, e.g. ".txt,.md" -> [".txt", ".md"]. Always lowercase, always
+  // dot-prefixed, regardless of how the user typed it in the editor.
+  _allowedTextExtensions() {
+    const raw =
+      (this._config && this._config.text_file_extensions) || DEFAULT_TEXT_FILE_EXTENSIONS;
+    return raw
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean)
+      .map((s) => (s.startsWith(".") ? s : "." + s));
+  }
+
   // Loads Tesseract.js from a CDN on first use only, and only once per page
   // load even if multiple images are read back to back.
   _ensureTesseract() {
@@ -897,6 +998,31 @@ class HaTextToSpeechCard extends HTMLElement {
       }
       this._imageBtn.disabled = false;
       this._speakBtn.disabled = false;
+    }
+  }
+
+  async _handleTextFile(file) {
+    if (!file) return;
+    this._attachBtn.disabled = true;
+    this._imageBtn.disabled = true;
+    try {
+      const text = await file.text();
+      const cleaned = (text || "").trim();
+      if (!cleaned) {
+        this._flashStatus("That file was empty", true, 3000);
+      } else {
+        this._textarea.value = cleaned;
+        this._flashStatus("Text loaded from file", false, 2000);
+      }
+    } catch (err) {
+      this._flashStatus(
+        "Couldn't read that file: " + (err && err.message ? err.message : err),
+        true,
+        4000
+      );
+    } finally {
+      this._attachBtn.disabled = false;
+      this._imageBtn.disabled = false;
     }
   }
 
@@ -1010,6 +1136,7 @@ class HaTextToSpeechCard extends HTMLElement {
 
     this._chunkQueue = chunks;
     this._chunkIndex = 0;
+    this._enterChunkDisplayMode();
 
     // same double-tap lock as a normal Speak click, but only for kicking
     // off a brand-new sequence - Pause/Resume/Next/Prev stay responsive
@@ -1052,6 +1179,7 @@ class HaTextToSpeechCard extends HTMLElement {
     this._startChunkTimer();
     this._updateChunkButtonLabel();
     this._renderChunkControls();
+    this._renderChunkDisplay();
 
     try {
       await this._hass.callService("tts", "speak", data, { entity_id: ttsEntityId });
@@ -1115,6 +1243,7 @@ class HaTextToSpeechCard extends HTMLElement {
     this._chunkObservedPlaying = false;
     this._updateChunkButtonLabel();
     this._renderChunkControls();
+    this._exitChunkDisplayMode();
     if (this._keepTextCheckbox && !this._keepTextCheckbox.checked) {
       this._textarea.value = "";
     }
@@ -1135,6 +1264,7 @@ class HaTextToSpeechCard extends HTMLElement {
     this._chunkObservedPlaying = false;
     this._updateChunkButtonLabel();
     this._renderChunkControls();
+    this._exitChunkDisplayMode();
     if (!this._hass || !this._config || !this._config.entity) return;
     try {
       await this._hass.callService(
@@ -1222,6 +1352,47 @@ class HaTextToSpeechCard extends HTMLElement {
       this._chunkPrevBtn.disabled = this._chunkIndex <= 0;
     }
   }
+
+  // Swaps the plain textarea out for a read-only display of the same text
+  // with the currently-playing chunk highlighted. Editing is disabled for
+  // the duration this way (there's no textarea to type into) rather than
+  // via a separate disabled flag - which also means the chunk boundaries
+  // computed at the start of the sequence can't drift out of sync with
+  // the text mid-sequence. The file-input buttons are disabled too, for
+  // the same reason - replacing the text mid-sequence would leave the
+  // chunk queue pointing at text that no longer matches what's shown.
+  _enterChunkDisplayMode() {
+    if (!this._chunkDisplay || !this._textarea) return;
+    this._textarea.hidden = true;
+    if (this._clearBtn) this._clearBtn.hidden = true;
+    if (this._imageBtn) this._imageBtn.disabled = true;
+    if (this._attachBtn) this._attachBtn.disabled = true;
+    this._chunkDisplay.hidden = false;
+    this._renderChunkDisplay();
+  }
+
+  _exitChunkDisplayMode() {
+    if (!this._chunkDisplay || !this._textarea) return;
+    this._chunkDisplay.hidden = true;
+    this._textarea.hidden = false;
+    if (this._clearBtn) this._clearBtn.hidden = false;
+    if (this._imageBtn) this._imageBtn.disabled = false;
+    if (this._attachBtn) this._attachBtn.disabled = false;
+  }
+
+  _renderChunkDisplay() {
+    if (!this._chunkDisplay || !this._chunkQueue) return;
+    this._chunkDisplay.innerHTML = this._chunkQueue
+      .map((chunk, i) => {
+        const cls = i === this._chunkIndex ? "chunk-piece active" : "chunk-piece";
+        return `<span class="${cls}">${escapeHtml(chunk)}</span>`;
+      })
+      .join(" ");
+    const activeEl = this._chunkDisplay.querySelector(".chunk-piece.active");
+    if (activeEl && activeEl.scrollIntoView) {
+      activeEl.scrollIntoView({ block: "nearest" });
+    }
+  }
 }
 
 class HaTextToSpeechCardEditor extends HTMLElement {
@@ -1247,6 +1418,8 @@ class HaTextToSpeechCardEditor extends HTMLElement {
       if (this._lockSecondsInput)
         this._lockSecondsInput.value =
           this._config.lock_seconds != null ? this._config.lock_seconds : 2;
+      if (this._textFileExtInput)
+        this._textFileExtInput.value = this._config.text_file_extensions || "";
       if (this._chunkedCheckbox) {
         this._chunkedCheckbox.checked = this._config.chunked_playback === true;
         this._chunkSplitBySelect.value =
@@ -1299,6 +1472,10 @@ class HaTextToSpeechCardEditor extends HTMLElement {
           <label>Lock button after Speak (seconds)</label>
           <input id="lock_seconds" type="number" min="0" max="10" step="0.5" />
         </div>
+        <div class="settings-row">
+          <label>Attach/drag-drop text file extensions</label>
+          <input id="text_file_extensions" type="text" placeholder=".txt, .md" />
+        </div>
         <div class="settings-row checkbox-row">
           <label><input id="chunked_playback" type="checkbox" /> Speak in chunks (word/sentence at a time)</label>
         </div>
@@ -1325,6 +1502,7 @@ class HaTextToSpeechCardEditor extends HTMLElement {
     this._cacheCheckbox = this.querySelector("#cache");
     this._keepTextCheckbox = this.querySelector("#keep_text");
     this._lockSecondsInput = this.querySelector("#lock_seconds");
+    this._textFileExtInput = this.querySelector("#text_file_extensions");
     this._chunkedCheckbox = this.querySelector("#chunked_playback");
     this._chunkSplitRow = this.querySelector("#chunk-split-row");
     this._chunkSplitBySelect = this.querySelector("#chunk_split_by");
@@ -1346,6 +1524,7 @@ class HaTextToSpeechCardEditor extends HTMLElement {
     this._keepTextCheckbox.checked = this._config.keep_text === true;
     this._lockSecondsInput.value =
       this._config.lock_seconds != null ? this._config.lock_seconds : 2;
+    this._textFileExtInput.value = this._config.text_file_extensions || "";
     this._chunkedCheckbox.checked = this._config.chunked_playback === true;
     this._chunkSplitBySelect.value =
       this._config.chunk_split_by === "sentences" ? "sentences" : "words";
@@ -1384,6 +1563,9 @@ class HaTextToSpeechCardEditor extends HTMLElement {
     this._lockSecondsInput.addEventListener("change", () => {
       const val = parseFloat(this._lockSecondsInput.value);
       this._valueChanged("lock_seconds", isNaN(val) || val < 0 ? 2 : val);
+    });
+    this._textFileExtInput.addEventListener("change", () => {
+      this._valueChanged("text_file_extensions", this._textFileExtInput.value.trim());
     });
     this._chunkedCheckbox.addEventListener("change", () => {
       this._valueChanged("chunked_playback", this._chunkedCheckbox.checked);
