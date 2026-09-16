@@ -2,6 +2,9 @@
 
 All notable changes to this card are documented here. Versions follow `YYYY.MM.DD.#`.
 
+## 2026.09.16.1
+- Added a small "Clear" button in the top-right corner of the text box to empty it in one tap - deliberately understated (a muted outline chip) so it doesn't compete with the Speak button.
+
 ## 2026.09.15.11
 - Pasting (Ctrl+V) an image or screenshot into the text box now reads its text via OCR, same as the camera button and drag-and-drop. Plain text/link pastes still behave normally.
 

@@ -55,7 +55,7 @@
  * intercepted.
  */
 
-const CARD_VERSION = "2026.09.15.11";
+const CARD_VERSION = "2026.09.16.1";
 
 console.info(
   `%c TEXT-TO-SPEECH-CARD %c ${CARD_VERSION} `,
@@ -323,6 +323,35 @@ class HaTextToSpeechCard extends HTMLElement {
           border: 2px dashed var(--primary-color, #03a9f4);
           background: var(--secondary-background-color, #eef7fc);
         }
+        .textarea-wrap {
+          position: relative;
+          flex: 1;
+          display: flex;
+        }
+        .textarea-wrap textarea {
+          flex: 1;
+        }
+        .clear-btn {
+          position: absolute;
+          top: 6px;
+          right: 6px;
+          appearance: none;
+          border: 1px solid var(--divider-color, #ccc);
+          border-radius: 4px;
+          background: var(--card-background-color, #fff);
+          color: var(--secondary-text-color, #888);
+          font-size: 11px;
+          padding: 2px 8px;
+          cursor: pointer;
+          opacity: 0.75;
+        }
+        .clear-btn:hover {
+          opacity: 1;
+          background: var(--secondary-background-color, #f0f0f0);
+        }
+        .clear-btn:active {
+          transform: translateY(1px);
+        }
         .row {
           display: flex;
           align-items: center;
@@ -389,10 +418,13 @@ class HaTextToSpeechCard extends HTMLElement {
       </style>
       <ha-card header="${title}">
         <div class="card-content">
-          <textarea
-            id="tts-text"
-            placeholder="Type or paste text to speak..."
-          ></textarea>
+          <div class="textarea-wrap">
+            <textarea
+              id="tts-text"
+              placeholder="Type or paste text to speak..."
+            ></textarea>
+            <button id="clear-btn" class="clear-btn" type="button" title="Clear text">Clear</button>
+          </div>
           <div class="row">
             <label class="keep-row">
               <input type="checkbox" id="keep-text" /> Keep text after speaking
@@ -433,6 +465,7 @@ class HaTextToSpeechCard extends HTMLElement {
     `;
 
     this._textarea = this.shadowRoot.getElementById("tts-text");
+    this._clearBtn = this.shadowRoot.getElementById("clear-btn");
     this._speakBtn = this.shadowRoot.getElementById("speak-btn");
     this._imageBtn = this.shadowRoot.getElementById("image-btn");
     this._imageFileInput = this.shadowRoot.getElementById("image-file");
@@ -449,6 +482,10 @@ class HaTextToSpeechCard extends HTMLElement {
     this._quickVoicesCache = [];
 
     this._speakBtn.addEventListener("click", () => this._speak());
+    this._clearBtn.addEventListener("click", () => {
+      this._textarea.value = "";
+      this._textarea.focus();
+    });
     this._imageBtn.addEventListener("click", () => this._imageFileInput.click());
     this._imageFileInput.addEventListener("change", () => {
       const file = this._imageFileInput.files && this._imageFileInput.files[0];
