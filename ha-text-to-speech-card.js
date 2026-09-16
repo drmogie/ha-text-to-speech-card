@@ -88,9 +88,20 @@
  * images - a recognized text file's contents replace the box, same as an
  * OCR result does. Which extensions count is configurable in the editor
  * (default .txt/.md); an image drop/attach still runs OCR as before.
+ *
+ * The scissors button (also next to the image button) lets you snip part
+ * of your own screen to read text from, for text that's on-screen but not
+ * in an image file you already have - it's a thin wrapper around the
+ * browser's own screen-share picker (getDisplayMedia): pick a tab/window/
+ * screen, it grabs one frame and immediately stops the share again (never
+ * leaves a live screen-share running), then you drag a selection box over
+ * just the text you want before it runs through the same OCR as the other
+ * image inputs. Desktop browsers only - getDisplayMedia isn't available on
+ * mobile browsers, so this button won't do anything useful on a phone or
+ * tablet.
  */
 
-const CARD_VERSION = "2026.09.16.5";
+const CARD_VERSION = "2026.09.16.6";
 
 console.info(
   `%c TEXT-TO-SPEECH-CARD %c ${CARD_VERSION} `,
@@ -104,6 +115,10 @@ function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
   );
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
 }
 
 const DEFAULT_TEXT_FILE_EXTENSIONS = ".txt,.md";
@@ -345,6 +360,64 @@ const SETTINGS_CSS = `
     padding: 4px 0;
     flex-shrink: 0;
   }
+  .snip-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0, 0, 0, 0.75);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 16px;
+    box-sizing: border-box;
+  }
+  .snip-overlay[hidden] { display: none; }
+  .snip-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    width: 100%;
+    max-width: 90vw;
+  }
+  .snip-hint {
+    color: #fff;
+    font-size: 13px;
+  }
+  .snip-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .snip-actions .text-btn {
+    color: #fff;
+  }
+  .snip-actions .speak-btn:disabled {
+    opacity: 0.4;
+  }
+  .snip-canvas-wrap {
+    position: relative;
+    display: inline-block;
+    max-width: 90vw;
+    max-height: 75vh;
+    line-height: 0;
+  }
+  .snip-canvas-wrap canvas {
+    display: block;
+    max-width: 90vw;
+    max-height: 75vh;
+    cursor: crosshair;
+    touch-action: none;
+  }
+  .snip-selection {
+    position: absolute;
+    border: 2px dashed #fff;
+    background: rgba(3, 169, 244, 0.25);
+    pointer-events: none;
+  }
+  .snip-selection[hidden] { display: none; }
 `;
 
 class HaTextToSpeechCard extends HTMLElement {
@@ -380,6 +453,9 @@ class HaTextToSpeechCard extends HTMLElement {
 
   disconnectedCallback() {
     this._stopChunkTimer();
+    if (this._snipEscapeHandler) {
+      window.removeEventListener("keydown", this._snipEscapeHandler);
+    }
   }
 
   getCardSize() {
@@ -614,6 +690,7 @@ class HaTextToSpeechCard extends HTMLElement {
               <input id="image-file" type="file" accept="image/*" hidden />
               <input id="text-file" type="file" hidden />
               <button id="image-btn" class="icon-btn" title="Read text from an image (or drag/drop or paste one into the box)">&#128247;</button>
+              <button id="snip-btn" class="icon-btn" title="Snip part of your screen to read text from">&#9986;&#65039;</button>
               <button id="attach-btn" class="icon-btn" title="Attach a text file (or drag/drop one into the box)">&#128206;</button>
               <button id="settings-toggle" class="icon-btn" title="Quick settings">&#9881;</button>
               <button id="speak-btn" class="speak-btn" type="button">Speak</button>
@@ -651,6 +728,19 @@ class HaTextToSpeechCard extends HTMLElement {
               <button id="quick-reset" class="text-btn">Reset to saved settings</button>
             </div>
           </div>
+          <div id="snip-overlay" class="snip-overlay" hidden>
+            <div class="snip-toolbar">
+              <span class="snip-hint">Drag to select the text you want, then Convert.</span>
+              <div class="snip-actions">
+                <button id="snip-cancel" class="text-btn" type="button">Cancel</button>
+                <button id="snip-confirm" class="speak-btn" type="button" disabled>Convert to text</button>
+              </div>
+            </div>
+            <div id="snip-canvas-wrap" class="snip-canvas-wrap">
+              <canvas id="snip-canvas"></canvas>
+              <div id="snip-selection" class="snip-selection" hidden></div>
+            </div>
+          </div>
         </div>
       </ha-card>
     `;
@@ -662,6 +752,14 @@ class HaTextToSpeechCard extends HTMLElement {
     this._imageFileInput = this.shadowRoot.getElementById("image-file");
     this._attachBtn = this.shadowRoot.getElementById("attach-btn");
     this._textFileInput = this.shadowRoot.getElementById("text-file");
+    this._snipBtn = this.shadowRoot.getElementById("snip-btn");
+    this._snipOverlay = this.shadowRoot.getElementById("snip-overlay");
+    this._snipCanvasWrap = this.shadowRoot.getElementById("snip-canvas-wrap");
+    this._snipCanvas = this.shadowRoot.getElementById("snip-canvas");
+    this._snipSelection = this.shadowRoot.getElementById("snip-selection");
+    this._snipCancelBtn = this.shadowRoot.getElementById("snip-cancel");
+    this._snipConfirmBtn = this.shadowRoot.getElementById("snip-confirm");
+    this._snipDragState = null;
     this._chunkDisplay = this.shadowRoot.getElementById("chunk-display");
     this._chunkRow = this.shadowRoot.getElementById("chunk-row");
     this._chunkPrevBtn = this.shadowRoot.getElementById("chunk-prev");
@@ -714,6 +812,47 @@ class HaTextToSpeechCard extends HTMLElement {
       const file = this._textFileInput.files && this._textFileInput.files[0];
       this._textFileInput.value = ""; // allow picking the same file again
       if (file) this._handleTextFile(file);
+    });
+    this._snipBtn.addEventListener("click", () => this._startSnip());
+    this._snipCancelBtn.addEventListener("click", () => this._closeSnipOverlay());
+    this._snipConfirmBtn.addEventListener("click", () => this._confirmSnip());
+    this._snipOverlay.addEventListener("click", (ev) => {
+      if (ev.target === this._snipOverlay) this._closeSnipOverlay();
+    });
+    // listened on window rather than the overlay itself - focus normally
+    // stays on the button that opened it, which sits outside the overlay,
+    // so a keydown there wouldn't bubble through the overlay's own tree.
+    // Stored so disconnectedCallback can remove it and not leak.
+    this._snipEscapeHandler = (ev) => {
+      if (ev.key === "Escape" && this._snipOverlay && !this._snipOverlay.hidden) {
+        this._closeSnipOverlay();
+      }
+    };
+    window.addEventListener("keydown", this._snipEscapeHandler);
+    this._snipCanvas.addEventListener("pointerdown", (ev) => {
+      const rect = this._snipCanvas.getBoundingClientRect();
+      const x = clamp(ev.clientX - rect.left, 0, rect.width);
+      const y = clamp(ev.clientY - rect.top, 0, rect.height);
+      this._snipDragState = { startX: x, startY: y, rect: { left: x, top: y, width: 0, height: 0 } };
+      this._snipSelection.hidden = false;
+      this._positionSnipSelection(this._snipDragState.rect);
+      this._snipCanvas.setPointerCapture(ev.pointerId);
+    });
+    this._snipCanvas.addEventListener("pointermove", (ev) => {
+      if (!this._snipDragState) return;
+      const rect = this._snipCanvas.getBoundingClientRect();
+      const x = clamp(ev.clientX - rect.left, 0, rect.width);
+      const y = clamp(ev.clientY - rect.top, 0, rect.height);
+      const left = Math.min(this._snipDragState.startX, x);
+      const top = Math.min(this._snipDragState.startY, y);
+      const width = Math.abs(x - this._snipDragState.startX);
+      const height = Math.abs(y - this._snipDragState.startY);
+      this._snipDragState.rect = { left, top, width, height };
+      this._positionSnipSelection(this._snipDragState.rect);
+    });
+    this._snipCanvas.addEventListener("pointerup", () => {
+      if (!this._snipDragState) return;
+      this._snipConfirmBtn.disabled = false;
     });
     this._textarea.addEventListener("dragover", (ev) => {
       if (!this._dragHasFile(ev.dataTransfer)) return;
@@ -1024,6 +1163,92 @@ class HaTextToSpeechCard extends HTMLElement {
       this._attachBtn.disabled = false;
       this._imageBtn.disabled = false;
     }
+  }
+
+  // Grabs a single frame of whatever tab/window/screen the user picks via
+  // the browser's native screen-share prompt, then opens the crop overlay
+  // on it. The share is stopped again immediately after that one frame -
+  // this never leaves a live screen-share running.
+  async _startSnip() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      this._flashStatus("Screen capture isn't supported in this browser", true, 4000);
+      return;
+    }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+    } catch (err) {
+      // user cancelled the picker - not worth flashing as an error
+      return;
+    }
+    const video = document.createElement("video");
+    video.muted = true;
+    video.srcObject = stream;
+    try {
+      await video.play();
+      if (video.readyState < 2) {
+        await new Promise((resolve) => video.addEventListener("loadeddata", resolve, { once: true }));
+      }
+      this._snipCanvas.width = video.videoWidth;
+      this._snipCanvas.height = video.videoHeight;
+      this._snipCanvas.getContext("2d").drawImage(video, 0, 0, this._snipCanvas.width, this._snipCanvas.height);
+      this._openSnipOverlay();
+    } catch (err) {
+      this._flashStatus(
+        "Couldn't capture the screen: " + (err && err.message ? err.message : err),
+        true,
+        4000
+      );
+    } finally {
+      stream.getTracks().forEach((t) => t.stop());
+    }
+  }
+
+  _openSnipOverlay() {
+    if (!this._snipOverlay) return;
+    this._snipDragState = null;
+    this._snipSelection.hidden = true;
+    this._snipConfirmBtn.disabled = true;
+    this._snipOverlay.hidden = false;
+  }
+
+  _closeSnipOverlay() {
+    if (this._snipOverlay) this._snipOverlay.hidden = true;
+    this._snipDragState = null;
+  }
+
+  _positionSnipSelection(rect) {
+    if (!this._snipSelection) return;
+    this._snipSelection.style.left = rect.left + "px";
+    this._snipSelection.style.top = rect.top + "px";
+    this._snipSelection.style.width = rect.width + "px";
+    this._snipSelection.style.height = rect.height + "px";
+  }
+
+  // Crops the captured frame to whatever was dragged (or the whole frame,
+  // if nothing was dragged) and runs it through the same OCR path as the
+  // camera button / attach / drag-drop.
+  _confirmSnip() {
+    const canvas = this._snipCanvas;
+    const rect = canvas.getBoundingClientRect();
+    let sel = this._snipDragState && this._snipDragState.rect;
+    if (!sel || sel.width < 4 || sel.height < 4) {
+      sel = { left: 0, top: 0, width: rect.width, height: rect.height };
+    }
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const sx = sel.left * scaleX;
+    const sy = sel.top * scaleY;
+    const sw = sel.width * scaleX;
+    const sh = sel.height * scaleY;
+    const cropped = document.createElement("canvas");
+    cropped.width = Math.max(1, Math.round(sw));
+    cropped.height = Math.max(1, Math.round(sh));
+    cropped.getContext("2d").drawImage(canvas, sx, sy, sw, sh, 0, 0, cropped.width, cropped.height);
+    this._closeSnipOverlay();
+    cropped.toBlob((blob) => {
+      if (blob) this._handleImageFile(blob);
+    }, "image/png");
   }
 
   // Sets the status line's text without touching the lock - use while a
@@ -1367,6 +1592,7 @@ class HaTextToSpeechCard extends HTMLElement {
     if (this._clearBtn) this._clearBtn.hidden = true;
     if (this._imageBtn) this._imageBtn.disabled = true;
     if (this._attachBtn) this._attachBtn.disabled = true;
+    if (this._snipBtn) this._snipBtn.disabled = true;
     this._chunkDisplay.hidden = false;
     this._renderChunkDisplay();
   }
@@ -1378,6 +1604,7 @@ class HaTextToSpeechCard extends HTMLElement {
     if (this._clearBtn) this._clearBtn.hidden = false;
     if (this._imageBtn) this._imageBtn.disabled = false;
     if (this._attachBtn) this._attachBtn.disabled = false;
+    if (this._snipBtn) this._snipBtn.disabled = false;
   }
 
   _renderChunkDisplay() {

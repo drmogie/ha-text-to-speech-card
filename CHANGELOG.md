@@ -2,6 +2,9 @@
 
 All notable changes to this card are documented here. Versions follow `YYYY.MM.DD.#`.
 
+## 2026.09.16.6
+- Added a scissors "snip" button next to the image button: it opens the browser's own screen-share picker (`getDisplayMedia`), grabs a single frame from whatever tab/window/screen you pick, immediately stops the share again, then opens a crop overlay where you drag a selection box over just the text you want (or convert the whole frame if you don't drag one) - the selection runs through the same OCR as the camera/attach/drag-drop inputs. Desktop browsers only; `getDisplayMedia` isn't available on mobile browsers, so the button will just show an error there.
+
 ## 2026.09.16.5
 - Added highlighted chunk playback: while a chunked sequence is running, the text box switches to a read-only view of the same text with whichever chunk is currently being spoken highlighted, and switches back to a normal editable box once the sequence stops or finishes. Editing is effectively disabled during playback as a side effect (there's no textarea to type into while the highlighted view is showing), which also keeps the chunk boundaries from drifting out of sync with the text mid-sequence.
 - Added a paperclip "attach" button next to the image button, and extended drag-and-drop, to also accept plain text files - not just images. A recognized text file's contents replace the box, same as an OCR result does. Which extensions count is configurable in the editor (`Attach/drag-drop text file extensions`, default `.txt, .md`).
