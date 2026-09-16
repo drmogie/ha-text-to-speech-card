@@ -9,6 +9,7 @@ A Home Assistant Lovelace card: paste or type any amount of text - no 255-charac
 - **Saved defaults, editable from the card face.** Set a default language, voice, voice-quality filter, and caching behavior in the GUI editor; a gear-icon "Quick settings" panel on the card lets you override any of them for just your next message, with a permanent "Reset to saved settings" button to snap back.
 - **Keep text after speaking.** An optional checkbox (default on the card face, with a matching saved default) leaves your text in the box instead of clearing it once spoken.
 - **Speak-button lock.** After clicking Speak, the button stays disabled for a configurable minimum time (default 2s) so a fast double-tap can't fire the same message twice.
+- **Optional chunked playback.** Instead of waiting for the whole box to synthesize as one clip before anything plays, split it into chunks (by word count or sentence count) spoken one at a time. Speak becomes Pause/Resume once a sequence starts, with Previous/Next chunk controls and a "chunk N of M" indicator. Resume always replays the current chunk from its start rather than trying to resume mid-clip, since that's the one behavior that's consistent across every media_player.
 - **No YAML required.** Full GUI configuration editor.
 - **Built for Lovelace Sections**, the latest Home Assistant layout.
 
@@ -49,6 +50,9 @@ Add a new card, search for **Text to Speech Card**, and configure it in the GUI 
 | Cache repeated messages by default | Whether repeated identical messages reuse a cached audio clip. |
 | Keep text in box after speaking by default | Whether the text box clears after a successful Speak. |
 | Lock button after Speak (seconds) | How long the Speak button stays disabled after a click, regardless of how fast the speak call itself finishes. Default 2. |
+| Speak in chunks | Splits the text and speaks it one chunk at a time instead of all at once, with Pause/Resume/Previous/Next controls. |
+| Split by | Words or Sentences - only shown when chunked playback is on. |
+| Words/Sentences per chunk | How many words (or sentences) go in each chunk. Defaults to 40 words or 2 sentences if left blank. |
 
 ## License
 

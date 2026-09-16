@@ -2,6 +2,9 @@
 
 All notable changes to this card are documented here. Versions follow `YYYY.MM.DD.#`.
 
+## 2026.09.16.2
+- Added optional chunked playback: split the text into chunks by word count or sentence count (your choice, in the editor) and speak them one at a time instead of waiting for the whole box to synthesize as a single clip. The Speak button becomes Pause/Resume once a sequence is running, with Previous/Next chunk controls and a "chunk N of M" indicator. Resume always replays the current chunk from its start rather than trying to resume mid-clip at an exact position, since real position-resume support varies too much across different media_player integrations to rely on - replaying the whole chunk behaves the same on any of them. Auto-advance to the next chunk is driven by watching the target speaker's own state (`playing` -> something else), not a timer.
+
 ## 2026.09.16.1
 - Added a small "Clear" button in the top-right corner of the text box to empty it in one tap - deliberately understated (a muted outline chip) so it doesn't compete with the Speak button.
 

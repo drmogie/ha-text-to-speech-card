@@ -53,9 +53,24 @@
  * (Ctrl+V) a copied image or screenshot. In every case a plain text/link
  * drag or paste still behaves normally - only an actual image is
  * intercepted.
+ *
+ * Optional chunked playback ("Speak in chunks" in the editor): instead of
+ * sending the whole box as one tts.speak call - which has to fully
+ * synthesize before ANY of it plays, so long text has a long wait before
+ * you hear anything - the text is split into chunks (by word count or
+ * sentence count, your choice) and spoken one at a time. The Speak button
+ * becomes Pause/Resume once a sequence is running, plus Previous/Next
+ * chunk controls and a "chunk N of M" indicator. Resume always re-speaks
+ * the CURRENT chunk from its start rather than trying to resume mid-audio
+ * at some exact position - that's deliberate, since real pause/resume-at-
+ * position support is inconsistent across different media_player
+ * integrations, while "replay this chunk" behaves identically on any of
+ * them. Advancing to the next chunk automatically is done by watching the
+ * target media_player's own state go from "playing" back to something
+ * else, not a timer.
  */
 
-const CARD_VERSION = "2026.09.16.1";
+const CARD_VERSION = "2026.09.16.2";
 
 console.info(
   `%c TEXT-TO-SPEECH-CARD %c ${CARD_VERSION} `,
@@ -131,6 +146,82 @@ function qualityLabel(q) {
     .split("_")
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
+}
+
+// ---- text-chunking helpers for optional chunked playback ----
+
+// A short list of common abbreviations so simple sentence-splitting
+// doesn't mistake "Dr. Smith" or "St. Louis" for two sentences. Not
+// exhaustive - a determined edge case can still fool it - but it covers
+// the common ones.
+const SENTENCE_ABBREVIATIONS = new Set([
+  "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "mt", "vs", "etc",
+  "approx", "fig", "no", "vol", "dept", "gov", "misc", "inc", "ltd", "co",
+  "gen", "rev", "hon", "capt", "lt", "col", "sgt",
+]);
+
+function splitIntoSentences(text) {
+  const trimmed = String(text).trim();
+  if (!trimmed) return [];
+  // A boundary candidate: sentence-ending punctuation, optional closing
+  // quote/paren, then whitespace. Scanned manually (not a single regex
+  // split) so each candidate can be checked against the abbreviation list
+  // and against whether the next word starts lowercase (usually means it
+  // wasn't really a sentence end) before committing to split there.
+  const boundary = /[.!?]+(["')\]]*)(\s+)/g;
+  let match;
+  let lastIndex = 0;
+  const sentences = [];
+  while ((match = boundary.exec(trimmed))) {
+    const endIndex = match.index + match[0].length;
+    const candidate = trimmed.slice(lastIndex, endIndex).trim();
+    const wordMatch = candidate.match(/([A-Za-z]+)[.!?]+["')\]]*$/);
+    const word = wordMatch ? wordMatch[1].toLowerCase() : "";
+    const nextChar = trimmed[endIndex] || "";
+    if (SENTENCE_ABBREVIATIONS.has(word) || /[a-z]/.test(nextChar)) {
+      continue; // not a real sentence boundary - keep scanning
+    }
+    sentences.push(candidate);
+    lastIndex = endIndex;
+  }
+  const remainder = trimmed.slice(lastIndex).trim();
+  if (remainder) sentences.push(remainder);
+  return sentences.length ? sentences : [trimmed];
+}
+
+function splitIntoWordChunks(text, wordsPerChunk) {
+  const words = String(text).trim().split(/\s+/).filter(Boolean);
+  const size = Math.max(1, wordsPerChunk);
+  const chunks = [];
+  for (let i = 0; i < words.length; i += size) {
+    chunks.push(words.slice(i, i + size).join(" "));
+  }
+  return chunks;
+}
+
+function groupIntoChunks(sentences, sentencesPerChunk) {
+  const size = Math.max(1, sentencesPerChunk);
+  const chunks = [];
+  for (let i = 0; i < sentences.length; i += size) {
+    chunks.push(sentences.slice(i, i + size).join(" "));
+  }
+  return chunks;
+}
+
+const DEFAULT_WORDS_PER_CHUNK = 40;
+const DEFAULT_SENTENCES_PER_CHUNK = 2;
+
+function defaultChunkSize(splitBy) {
+  return splitBy === "sentences" ? DEFAULT_SENTENCES_PER_CHUNK : DEFAULT_WORDS_PER_CHUNK;
+}
+
+function buildChunks(text, splitBy, size) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return [];
+  if (splitBy === "sentences") {
+    return groupIntoChunks(splitIntoSentences(trimmed), size);
+  }
+  return splitIntoWordChunks(trimmed, size);
 }
 
 // items: [{value, label}]
@@ -235,6 +326,9 @@ class HaTextToSpeechCard extends HTMLElement {
     if (!config) {
       throw new Error("Invalid configuration");
     }
+    if (this._chunkQueue && !config.chunked_playback) {
+      this._cancelChunks();
+    }
     this._config = config;
     this._overrides = null;
     this._render();
@@ -244,6 +338,7 @@ class HaTextToSpeechCard extends HTMLElement {
     this._hass = hass;
     this._render();
     this._updateStatus();
+    this._watchChunkPlayback();
   }
 
   getCardSize() {
@@ -414,6 +509,26 @@ class HaTextToSpeechCard extends HTMLElement {
           box-shadow: none;
           transform: none;
         }
+        .chunk-row {
+          justify-content: space-between;
+        }
+        .chunk-nav {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .chunk-nav .icon-btn {
+          width: 28px;
+          height: 28px;
+          font-size: 12px;
+        }
+        .chunk-indicator {
+          display: inline-block;
+          min-width: 64px;
+          text-align: center;
+          font-size: 12px;
+          color: var(--secondary-text-color, #888);
+        }
         ${SETTINGS_CSS}
       </style>
       <ha-card header="${title}">
@@ -435,6 +550,14 @@ class HaTextToSpeechCard extends HTMLElement {
               <button id="settings-toggle" class="icon-btn" title="Quick settings">&#9881;</button>
               <button id="speak-btn" class="speak-btn" type="button">Speak</button>
             </div>
+          </div>
+          <div id="chunk-row" class="row chunk-row" hidden>
+            <div class="chunk-nav">
+              <button id="chunk-prev" class="icon-btn" type="button" title="Previous chunk">&#9664;</button>
+              <span id="chunk-indicator" class="chunk-indicator"></span>
+              <button id="chunk-next" class="icon-btn" type="button" title="Next chunk">&#9654;</button>
+            </div>
+            <button id="chunk-stop" class="text-btn" type="button">Stop</button>
           </div>
           <div class="row">
             <span id="target-name" class="target"></span>
@@ -469,6 +592,16 @@ class HaTextToSpeechCard extends HTMLElement {
     this._speakBtn = this.shadowRoot.getElementById("speak-btn");
     this._imageBtn = this.shadowRoot.getElementById("image-btn");
     this._imageFileInput = this.shadowRoot.getElementById("image-file");
+    this._chunkRow = this.shadowRoot.getElementById("chunk-row");
+    this._chunkPrevBtn = this.shadowRoot.getElementById("chunk-prev");
+    this._chunkNextBtn = this.shadowRoot.getElementById("chunk-next");
+    this._chunkStopBtn = this.shadowRoot.getElementById("chunk-stop");
+    this._chunkIndicator = this.shadowRoot.getElementById("chunk-indicator");
+    this._chunkQueue = null;
+    this._chunkIndex = 0;
+    this._chunkState = "idle";
+    this._chunkAwaitingStart = false;
+    this._lastTargetPlayerState = null;
     this._targetName = this.shadowRoot.getElementById("target-name");
     this._keepTextCheckbox = this.shadowRoot.getElementById("keep-text");
     this._keepTextCheckbox.checked = this._config.keep_text === true;
@@ -481,7 +614,16 @@ class HaTextToSpeechCard extends HTMLElement {
     this._quickResetBtn = this.shadowRoot.getElementById("quick-reset");
     this._quickVoicesCache = [];
 
-    this._speakBtn.addEventListener("click", () => this._speak());
+    this._speakBtn.addEventListener("click", () => {
+      if (this._config && this._config.chunked_playback) {
+        this._chunkPlayPauseResume();
+      } else {
+        this._speak();
+      }
+    });
+    this._chunkPrevBtn.addEventListener("click", () => this._prevChunk());
+    this._chunkNextBtn.addEventListener("click", () => this._nextChunkManual());
+    this._chunkStopBtn.addEventListener("click", () => this._cancelChunks());
     this._clearBtn.addEventListener("click", () => {
       this._textarea.value = "";
       this._textarea.focus();
@@ -819,6 +961,216 @@ class HaTextToSpeechCard extends HTMLElement {
       this._speakBtn.textContent = "Speak";
     }
   }
+
+  // ---- chunked playback ----
+
+  _chunkPlayPauseResume() {
+    if (this._chunkState === "playing") {
+      this._pauseChunks();
+    } else if (this._chunkState === "paused") {
+      this._resumeChunks();
+    } else {
+      this._startChunkedSpeak();
+    }
+  }
+
+  async _startChunkedSpeak() {
+    if (!this._hass || !this._config || !this._config.entity) {
+      this._flashError("No target speaker configured");
+      return;
+    }
+    const text = (this._textarea.value || "").trim();
+    if (!text) return;
+    const splitBy = this._config.chunk_split_by === "sentences" ? "sentences" : "words";
+    const size = this._config.chunk_size || defaultChunkSize(splitBy);
+    const chunks = buildChunks(text, splitBy, size);
+    if (!chunks.length) return;
+
+    this._chunkQueue = chunks;
+    this._chunkIndex = 0;
+
+    // same double-tap lock as a normal Speak click, but only for kicking
+    // off a brand-new sequence - Pause/Resume/Next/Prev stay responsive
+    const lockMs = this._lockSeconds() * 1000;
+    const startedAt = Date.now();
+    this._speakBtn.disabled = true;
+    this._imageBtn.disabled = true;
+    await this._playCurrentChunk();
+    const remaining = lockMs - (Date.now() - startedAt);
+    if (remaining > 0) {
+      await new Promise((resolve) => setTimeout(resolve, remaining));
+    }
+    this._speakBtn.disabled = false;
+    this._imageBtn.disabled = false;
+  }
+
+  async _playCurrentChunk() {
+    if (!this._chunkQueue) return;
+    const ttsEntityId = this._config.tts_entity || this._findDefaultTtsEntity();
+    if (!ttsEntityId) {
+      this._flashError("No TTS engine (tts.*) found in this HA instance");
+      this._cancelChunks();
+      return;
+    }
+
+    const ov = this._overrides || this._defaultsFromConfig();
+    const data = {
+      media_player_entity_id: this._config.entity,
+      message: this._chunkQueue[this._chunkIndex],
+      cache: ov.cache !== false,
+    };
+    if (ov.language) data.language = ov.language;
+    const options = {};
+    if (ov.voice) options.voice = ov.voice;
+    if (Object.keys(options).length) data.options = options;
+
+    this._chunkState = "playing";
+    this._chunkAwaitingStart = true;
+    const targetState = this._hass.states[this._config.entity];
+    this._lastTargetPlayerState = targetState ? targetState.state : null;
+    this._updateChunkButtonLabel();
+    this._renderChunkControls();
+
+    try {
+      await this._hass.callService("tts", "speak", data, { entity_id: ttsEntityId });
+    } catch (err) {
+      this._flashError("Speak failed: " + (err && err.message ? err.message : err));
+      this._cancelChunks();
+    }
+  }
+
+  async _pauseChunks() {
+    if (this._chunkState !== "playing") return;
+    // flip state before the (async) stop call so the hass-driven watcher
+    // below sees we're intentionally paused, not that the chunk finished
+    this._chunkState = "paused";
+    this._updateChunkButtonLabel();
+    this._renderChunkControls();
+    if (!this._hass || !this._config || !this._config.entity) return;
+    try {
+      await this._hass.callService(
+        "media_player",
+        "media_stop",
+        {},
+        { entity_id: this._config.entity }
+      );
+    } catch (err) {
+      // some players don't support media_stop cleanly - not worth
+      // surfacing as an error, the pause still took effect on our side
+    }
+  }
+
+  _resumeChunks() {
+    if (this._chunkState !== "paused") return;
+    // re-speak the SAME chunk from its start - see the header comment for
+    // why this is more reliable than trying to resume mid-clip
+    this._playCurrentChunk();
+  }
+
+  _prevChunk() {
+    if (!this._chunkQueue || this._chunkIndex <= 0) return;
+    this._chunkIndex--;
+    this._playCurrentChunk();
+  }
+
+  _nextChunkManual() {
+    if (!this._chunkQueue) return;
+    if (this._chunkIndex < this._chunkQueue.length - 1) {
+      this._chunkIndex++;
+      this._playCurrentChunk();
+    } else {
+      this._finishChunks();
+    }
+  }
+
+  _finishChunks() {
+    this._chunkQueue = null;
+    this._chunkIndex = 0;
+    this._chunkState = "idle";
+    this._chunkAwaitingStart = false;
+    this._updateChunkButtonLabel();
+    this._renderChunkControls();
+    if (this._keepTextCheckbox && !this._keepTextCheckbox.checked) {
+      this._textarea.value = "";
+    }
+  }
+
+  async _cancelChunks() {
+    if (!this._chunkQueue) return;
+    this._chunkQueue = null;
+    this._chunkIndex = 0;
+    this._chunkState = "idle";
+    this._chunkAwaitingStart = false;
+    this._updateChunkButtonLabel();
+    this._renderChunkControls();
+    if (!this._hass || !this._config || !this._config.entity) return;
+    try {
+      await this._hass.callService(
+        "media_player",
+        "media_stop",
+        {},
+        { entity_id: this._config.entity }
+      );
+    } catch (err) {
+      // best-effort
+    }
+  }
+
+  // Called on every hass update. hass updates on every entity state change
+  // anywhere in the system, which is how this notices the target speaker's
+  // own state moving from "playing" to something else - that's the signal
+  // a chunk finished naturally and it's time to auto-advance.
+  _watchChunkPlayback() {
+    if (!this._chunkQueue || this._chunkState !== "playing") return;
+    if (!this._config || !this._config.entity || !this._hass) return;
+    const state = this._hass.states[this._config.entity];
+    const current = state ? state.state : null;
+    const prev = this._lastTargetPlayerState;
+    this._lastTargetPlayerState = current;
+
+    if (current === "playing") {
+      this._chunkAwaitingStart = false; // confirmed this chunk actually started
+      return;
+    }
+    // still waiting for it to even start (HA is synthesizing) - a
+    // transient non-"playing" state here doesn't mean it's already done
+    if (this._chunkAwaitingStart) return;
+
+    if (prev === "playing" && current !== "playing") {
+      this._advanceChunk();
+    }
+  }
+
+  _advanceChunk() {
+    if (!this._chunkQueue) return;
+    if (this._chunkIndex < this._chunkQueue.length - 1) {
+      this._chunkIndex++;
+      this._playCurrentChunk();
+    } else {
+      this._finishChunks();
+    }
+  }
+
+  _updateChunkButtonLabel() {
+    if (!this._speakBtn) return;
+    if (this._chunkState === "playing") {
+      this._speakBtn.textContent = "Pause";
+    } else if (this._chunkState === "paused") {
+      this._speakBtn.textContent = "Resume";
+    } else {
+      this._speakBtn.textContent = "Speak";
+    }
+  }
+
+  _renderChunkControls() {
+    if (!this._chunkRow) return;
+    const active = !!this._chunkQueue;
+    this._chunkRow.hidden = !active;
+    if (active) {
+      this._chunkIndicator.textContent = `${this._chunkIndex + 1} of ${this._chunkQueue.length}`;
+      this._chunkPrevBtn.disabled = this._chunkIndex <= 0;
+    }
+  }
 }
 
 class HaTextToSpeechCardEditor extends HTMLElement {
@@ -844,6 +1196,14 @@ class HaTextToSpeechCardEditor extends HTMLElement {
       if (this._lockSecondsInput)
         this._lockSecondsInput.value =
           this._config.lock_seconds != null ? this._config.lock_seconds : 2;
+      if (this._chunkedCheckbox) {
+        this._chunkedCheckbox.checked = this._config.chunked_playback === true;
+        this._chunkSplitBySelect.value =
+          this._config.chunk_split_by === "sentences" ? "sentences" : "words";
+        this._chunkSizeInput.value =
+          this._config.chunk_size != null ? this._config.chunk_size : "";
+        this._updateChunkFieldsVisibility();
+      }
       return;
     }
     this._built = true;
@@ -888,6 +1248,20 @@ class HaTextToSpeechCardEditor extends HTMLElement {
           <label>Lock button after Speak (seconds)</label>
           <input id="lock_seconds" type="number" min="0" max="10" step="0.5" />
         </div>
+        <div class="settings-row checkbox-row">
+          <label><input id="chunked_playback" type="checkbox" /> Speak in chunks (word/sentence at a time)</label>
+        </div>
+        <div class="settings-row" id="chunk-split-row" hidden>
+          <label>Split by</label>
+          <select id="chunk_split_by">
+            <option value="words">Words</option>
+            <option value="sentences">Sentences</option>
+          </select>
+        </div>
+        <div class="settings-row" id="chunk-size-row" hidden>
+          <label id="chunk-size-label">Words per chunk</label>
+          <input id="chunk_size" type="number" min="1" max="200" step="1" />
+        </div>
       </div>
     `;
 
@@ -900,6 +1274,12 @@ class HaTextToSpeechCardEditor extends HTMLElement {
     this._cacheCheckbox = this.querySelector("#cache");
     this._keepTextCheckbox = this.querySelector("#keep_text");
     this._lockSecondsInput = this.querySelector("#lock_seconds");
+    this._chunkedCheckbox = this.querySelector("#chunked_playback");
+    this._chunkSplitRow = this.querySelector("#chunk-split-row");
+    this._chunkSplitBySelect = this.querySelector("#chunk_split_by");
+    this._chunkSizeRow = this.querySelector("#chunk-size-row");
+    this._chunkSizeLabel = this.querySelector("#chunk-size-label");
+    this._chunkSizeInput = this.querySelector("#chunk_size");
 
     if (this._hass) {
       this._entityPicker.hass = this._hass;
@@ -915,6 +1295,11 @@ class HaTextToSpeechCardEditor extends HTMLElement {
     this._keepTextCheckbox.checked = this._config.keep_text === true;
     this._lockSecondsInput.value =
       this._config.lock_seconds != null ? this._config.lock_seconds : 2;
+    this._chunkedCheckbox.checked = this._config.chunked_playback === true;
+    this._chunkSplitBySelect.value =
+      this._config.chunk_split_by === "sentences" ? "sentences" : "words";
+    this._chunkSizeInput.value = this._config.chunk_size != null ? this._config.chunk_size : "";
+    this._updateChunkFieldsVisibility();
 
     this._titleInput.addEventListener("input", (ev) =>
       this._valueChanged("title", ev.target.value)
@@ -948,6 +1333,19 @@ class HaTextToSpeechCardEditor extends HTMLElement {
     this._lockSecondsInput.addEventListener("change", () => {
       const val = parseFloat(this._lockSecondsInput.value);
       this._valueChanged("lock_seconds", isNaN(val) || val < 0 ? 2 : val);
+    });
+    this._chunkedCheckbox.addEventListener("change", () => {
+      this._valueChanged("chunked_playback", this._chunkedCheckbox.checked);
+      this._updateChunkFieldsVisibility();
+    });
+    this._chunkSplitBySelect.addEventListener("change", () => {
+      this._valueChanged("chunk_split_by", this._chunkSplitBySelect.value);
+      this._updateChunkFieldsVisibility();
+    });
+    this._chunkSizeInput.addEventListener("change", () => {
+      const raw = this._chunkSizeInput.value;
+      const val = raw === "" ? NaN : parseInt(raw, 10);
+      this._valueChanged("chunk_size", raw === "" || isNaN(val) || val < 1 ? "" : val);
     });
 
     this._reloadLanguages();
@@ -1003,6 +1401,16 @@ class HaTextToSpeechCardEditor extends HTMLElement {
       "Engine's own default",
       this._config.voice || ""
     );
+  }
+
+  _updateChunkFieldsVisibility() {
+    if (!this._chunkSplitRow) return;
+    const enabled = this._chunkedCheckbox.checked;
+    this._chunkSplitRow.hidden = !enabled;
+    this._chunkSizeRow.hidden = !enabled;
+    const bySentences = this._chunkSplitBySelect.value === "sentences";
+    this._chunkSizeLabel.textContent = bySentences ? "Sentences per chunk" : "Words per chunk";
+    this._chunkSizeInput.placeholder = String(defaultChunkSize(bySentences ? "sentences" : "words"));
   }
 
   _valueChanged(key, value) {
