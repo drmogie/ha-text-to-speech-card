@@ -2,6 +2,9 @@
 
 All notable changes to this card are documented here. Versions follow `YYYY.MM.DD.#`.
 
+## 2026.09.16.7
+- Fixed chunked playback cutting a chunk off after only its first line/sentence before auto-advancing to the next one. Auto-advance previously acted on the very first "not playing" reading it saw once a chunk had started - but some media_player integrations report a brief gap between sentences or lines within the SAME chunk, which looked identical to the chunk actually finishing. A "not playing" reading now has to hold steady for about 1.8 seconds before it's trusted, so a momentary inter-sentence gap no longer triggers a premature advance.
+
 ## 2026.09.16.6
 - Added a scissors "snip" button next to the image button: it opens the browser's own screen-share picker (`getDisplayMedia`), grabs a single frame from whatever tab/window/screen you pick, immediately stops the share again, then opens a crop overlay where you drag a selection box over just the text you want (or convert the whole frame if you don't drag one) - the selection runs through the same OCR as the camera/attach/drag-drop inputs. Desktop browsers only; `getDisplayMedia` isn't available on mobile browsers, so the button will just show an error there.
 

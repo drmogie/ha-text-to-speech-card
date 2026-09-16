@@ -74,7 +74,11 @@
  * brief grace period after a chunk starts (so a not-yet-started player
  * isn't mistaken for a finished one), a longer startup window after which
  * a never-seen "playing" state is trusted anyway, and an outer max-wait so
- * a stuck-reporting player can't hang the sequence indefinitely.
+ * a stuck-reporting player can't hang the sequence indefinitely. A "not
+ * playing" reading also has to hold steady for a bit before it's trusted -
+ * some players report a brief gap between sentences/lines within the SAME
+ * chunk, which without this would look identical to the chunk actually
+ * finishing and cut it off after only its first line.
  *
  * While a chunked sequence is active, the textarea is swapped out for a
  * read-only display of the same text with the chunk currently being spoken
@@ -101,7 +105,7 @@
  * tablet.
  */
 
-const CARD_VERSION = "2026.09.16.6";
+const CARD_VERSION = "2026.09.16.7";
 
 console.info(
   `%c TEXT-TO-SPEECH-CARD %c ${CARD_VERSION} `,
@@ -257,6 +261,7 @@ const DEFAULT_SENTENCES_PER_CHUNK = 2;
 // for why this is time-based rather than purely state-pulse-based.
 const CHUNK_START_GRACE_MS = 1500; // never trust a "not playing" reading before this
 const CHUNK_STARTUP_TIMEOUT_MS = 6000; // give up waiting for a "playing" pulse after this
+const CHUNK_STOP_CONFIRM_MS = 1800; // a "not playing" reading must hold steady this long
 const CHUNK_MAX_WAIT_MS = 45000; // force-advance regardless, so a stuck player can't hang
 const CHUNK_POLL_MS = 1000; // periodic backstop check, independent of hass push events
 
@@ -771,6 +776,7 @@ class HaTextToSpeechCard extends HTMLElement {
     this._chunkState = "idle";
     this._chunkStartedAt = null;
     this._chunkObservedPlaying = false;
+    this._chunkNotPlayingSince = null;
     this._chunkPollTimer = null;
     this._targetName = this.shadowRoot.getElementById("target-name");
     this._keepTextCheckbox = this.shadowRoot.getElementById("keep-text");
@@ -1401,6 +1407,7 @@ class HaTextToSpeechCard extends HTMLElement {
     this._chunkState = "playing";
     this._chunkStartedAt = Date.now();
     this._chunkObservedPlaying = false;
+    this._chunkNotPlayingSince = null;
     this._startChunkTimer();
     this._updateChunkButtonLabel();
     this._renderChunkControls();
@@ -1466,6 +1473,7 @@ class HaTextToSpeechCard extends HTMLElement {
     this._stopChunkTimer();
     this._chunkStartedAt = null;
     this._chunkObservedPlaying = false;
+    this._chunkNotPlayingSince = null;
     this._updateChunkButtonLabel();
     this._renderChunkControls();
     this._exitChunkDisplayMode();
@@ -1487,6 +1495,7 @@ class HaTextToSpeechCard extends HTMLElement {
     this._stopChunkTimer();
     this._chunkStartedAt = null;
     this._chunkObservedPlaying = false;
+    this._chunkNotPlayingSince = null;
     this._updateChunkButtonLabel();
     this._renderChunkControls();
     this._exitChunkDisplayMode();
@@ -1526,20 +1535,33 @@ class HaTextToSpeechCard extends HTMLElement {
     if (!this._config || !this._config.entity || !this._hass) return;
 
     const elapsed = Date.now() - (this._chunkStartedAt || 0);
-    if (elapsed < CHUNK_START_GRACE_MS) return; // too early to judge - still starting up
-
     const state = this._hass.states[this._config.entity];
     const current = state ? state.state : null;
 
     if (current === "playing") {
       this._chunkObservedPlaying = true;
+      // a genuine "playing" reading means it's NOT actually stopped, even
+      // if it looked that way a moment ago - cancel any pending advance
+      this._chunkNotPlayingSince = null;
       // stuck reporting "playing" way past any reasonable chunk length -
       // don't let it hang the whole sequence
       if (elapsed > CHUNK_MAX_WAIT_MS) this._advanceChunk();
       return;
     }
 
-    // not "playing" right now - trust it once we've either seen this chunk
+    if (elapsed < CHUNK_START_GRACE_MS) return; // too early to judge - still starting up
+
+    // Not "playing" right now - but a brief dip here doesn't necessarily
+    // mean the chunk is done. Some players report a short gap between
+    // sentences/lines within the SAME utterance (this is what caused a
+    // chunk to get cut off after only its first line, advancing early on
+    // that first gap) - so a "not playing" reading has to hold steady for
+    // CHUNK_STOP_CONFIRM_MS before it's trusted, not acted on immediately.
+    if (this._chunkNotPlayingSince == null) this._chunkNotPlayingSince = Date.now();
+    const notPlayingFor = Date.now() - this._chunkNotPlayingSince;
+    if (notPlayingFor < CHUNK_STOP_CONFIRM_MS) return;
+
+    // confirmed stopped - trust it once we've either seen this chunk
     // actually start playing at some point, or given up waiting for that
     // pulse (this integration may never send one)
     if (this._chunkObservedPlaying || elapsed > CHUNK_STARTUP_TIMEOUT_MS) {
