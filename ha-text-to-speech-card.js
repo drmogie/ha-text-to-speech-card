@@ -77,7 +77,7 @@
  * a stuck-reporting player can't hang the sequence indefinitely.
  */
 
-const CARD_VERSION = "2026.09.16.3";
+const CARD_VERSION = "2026.09.16.4";
 
 console.info(
   `%c TEXT-TO-SPEECH-CARD %c ${CARD_VERSION} `,
@@ -353,6 +353,9 @@ class HaTextToSpeechCard extends HTMLElement {
     this._render();
     this._updateStatus();
     this._checkChunkFinished();
+    // self-heals the chunk row/indicator if anything ever leaves it out of
+    // sync with the real queue/index - cheap, and runs on every hass tick
+    this._renderChunkControls();
   }
 
   disconnectedCallback() {
@@ -1117,8 +1120,13 @@ class HaTextToSpeechCard extends HTMLElement {
     }
   }
 
+  // Stop must always actually stop, even if the internal bookkeeping thinks
+  // there's nothing to stop (e.g. after some other bug leaves the row
+  // visible with stale state) - the user's goal in clicking it is "make the
+  // sound stop," not "only do something if my own state agrees a sequence
+  // is running." So this resets state and sends media_stop unconditionally
+  // rather than bailing out early, and it's safe to call repeatedly.
   async _cancelChunks() {
-    if (!this._chunkQueue) return;
     this._chunkQueue = null;
     this._chunkIndex = 0;
     this._chunkState = "idle";

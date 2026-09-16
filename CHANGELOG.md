@@ -2,6 +2,9 @@
 
 All notable changes to this card are documented here. Versions follow `YYYY.MM.DD.#`.
 
+## 2026.09.16.4
+- Made the chunked-playback Stop button always actually stop - it now resets state and sends `media_player.media_stop` unconditionally instead of bailing out early if its own internal bookkeeping thought there was nothing to stop, and the chunk row/indicator now re-syncs itself on every update rather than only when a chunk method happens to redraw it. Response to a report that Pause/Next/Stop all seemed unresponsive at times after `2026.09.16.3` - this closes a real gap in Stop's reliability; if Pause/Next were also affected by a stale display (row showing but out of sync with the real state), the added self-healing redraw should catch that too. Still watching for a report back to confirm this fully resolves it, since it couldn't be reproduced live from here.
+
 ## 2026.09.16.3
 - Fixed chunked playback not auto-advancing after a manually-navigated chunk (Previous/Next) finished, requiring a click for every remaining chunk. Auto-advance previously required observing the target media_player report a literal `playing` state before it would trust a later non-`playing` reading as "done" - some media_player integrations (including browser-based custom speakers) never report that state at all, which left the sequence permanently stuck once that happened. It's now time-based: a short grace period after a chunk starts (so a not-yet-started player isn't mistaken for a finished one), a longer window after which a never-seen `playing` state is trusted anyway, and an outer max-wait so a stuck-reporting player can't hang the sequence.
 
