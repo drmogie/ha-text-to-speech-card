@@ -105,7 +105,7 @@
  * tablet.
  */
 
-const CARD_VERSION = "2026.09.17.4";
+const CARD_VERSION = "2026.09.17.5";
 
 console.info(
   `%c TEXT-TO-SPEECH-CARD %c ${CARD_VERSION} `,
@@ -261,7 +261,7 @@ const DEFAULT_SENTENCES_PER_CHUNK = 2;
 // for why this is time-based rather than purely state-pulse-based.
 const CHUNK_START_GRACE_MS = 1500; // never trust a "not playing" reading before this
 const CHUNK_STARTUP_TIMEOUT_MS = 6000; // give up waiting for a "playing" pulse after this
-const CHUNK_STOP_CONFIRM_MS = 1800; // a "not playing" reading must hold steady this long
+const CHUNK_STOP_CONFIRM_MS = 3000; // a "not playing" reading must hold steady this long
 const CHUNK_MAX_WAIT_MS = 45000; // force-advance regardless, so a stuck player can't hang
 const CHUNK_POLL_MS = 1000; // periodic backstop check, independent of hass push events
 
@@ -274,10 +274,14 @@ const CHUNK_POLL_MS = 1000; // periodic backstop check, independent of hass push
 // Deliberately generous (natural speech is usually a bit faster than this)
 // since the cost of guessing too long is a short silent pause, while
 // guessing too short is the exact "cut off mid-line" bug this exists to
-// prevent.
-const CHUNK_MS_PER_WORD_ESTIMATE = 380; // ~155 words/minute
-const CHUNK_DURATION_FLOOR_MS = 2500; // minimum estimate, even for a one-word chunk
-const CHUNK_DURATION_LATENCY_MS = 1200; // rough allowance for synthesis + network before audio starts
+// prevent. Bumped up a notch (and CHUNK_STOP_CONFIRM_MS above raised too)
+// after a report that a chunk was still occasionally getting cut off in
+// its last second or two even with the first version of this estimate -
+// the estimate itself was roughly right, it just didn't leave quite enough
+// margin at the tail end of a chunk.
+const CHUNK_MS_PER_WORD_ESTIMATE = 420; // ~143 words/minute
+const CHUNK_DURATION_FLOOR_MS = 3000; // minimum estimate, even for a one-word chunk
+const CHUNK_DURATION_LATENCY_MS = 1500; // rough allowance for synthesis + network before audio starts
 
 function estimateChunkDurationMs(text) {
   const words = (text || "").trim().split(/\s+/).filter(Boolean).length;
@@ -539,6 +543,8 @@ class HaTextToSpeechCard extends HTMLElement {
           gap: 8px;
           flex: 1;
           min-height: 0;
+          container-type: inline-size;
+          container-name: ha-tts-card;
         }
         textarea {
           width: 100%;
@@ -626,7 +632,10 @@ class HaTextToSpeechCard extends HTMLElement {
           gap: 8px;
         }
         .actions-row {
+          grid-area: actions;
+          display: flex;
           justify-content: flex-end;
+          min-width: 0;
         }
         .actions {
           display: flex;
@@ -677,13 +686,40 @@ class HaTextToSpeechCard extends HTMLElement {
           box-shadow: none;
           transform: none;
         }
+        /* Groups the chunk-nav arrows, the icon/Speak buttons, and Stop into
+           one responsive layout instead of three independent rows, so their
+           line arrangement can actually change on a narrow card (see the
+           container query below) rather than just wrapping wherever flex
+           happens to break - a plain flex-wrap couldn't put Stop on its own
+           line when there's room, but move it in next to the arrows when
+           there isn't. */
+        .chunk-controls {
+          display: grid;
+          grid-template-columns: 1fr auto;
+          grid-template-areas:
+            "nav actions"
+            "stop stop";
+          column-gap: 8px;
+          row-gap: 6px;
+          align-items: center;
+        }
+        @container ha-tts-card (max-width: 440px) {
+          .chunk-controls {
+            grid-template-areas:
+              "actions actions"
+              "nav stop";
+          }
+        }
         .chunk-row {
+          grid-area: stop;
+          display: flex;
           justify-content: flex-end;
         }
         .chunk-nav-row {
+          grid-area: nav;
+          display: flex;
           justify-content: flex-start;
-          flex-wrap: wrap;
-          row-gap: 4px;
+          min-width: 0;
         }
         .chunk-nav {
           display: flex;
@@ -715,26 +751,28 @@ class HaTextToSpeechCard extends HTMLElement {
             <div id="chunk-display" class="chunk-display" hidden></div>
             <button id="clear-btn" class="clear-btn" type="button" title="Clear text">Clear</button>
           </div>
-          <div id="chunk-nav-row" class="row chunk-nav-row" hidden>
-            <div class="chunk-nav">
-              <button id="chunk-prev" class="icon-btn" type="button" title="Previous chunk">&#9664;</button>
-              <span id="chunk-indicator" class="chunk-indicator"></span>
-              <button id="chunk-next" class="icon-btn" type="button" title="Next chunk">&#9654;</button>
+          <div class="chunk-controls">
+            <div id="chunk-nav-row" class="chunk-nav-row" hidden>
+              <div class="chunk-nav">
+                <button id="chunk-prev" class="icon-btn" type="button" title="Previous chunk">&#9664;</button>
+                <span id="chunk-indicator" class="chunk-indicator"></span>
+                <button id="chunk-next" class="icon-btn" type="button" title="Next chunk">&#9654;</button>
+              </div>
             </div>
-          </div>
-          <div class="row actions-row">
-            <div class="actions">
-              <input id="image-file" type="file" accept="image/*" hidden />
-              <input id="text-file" type="file" hidden />
-              <button id="image-btn" class="icon-btn" title="Read text from an image (or drag/drop or paste one into the box)">&#128247;</button>
-              <button id="snip-btn" class="icon-btn" title="Snip part of your screen to read text from">&#9986;&#65039;</button>
-              <button id="attach-btn" class="icon-btn" title="Attach a text file (or drag/drop one into the box)">&#128206;</button>
-              <button id="settings-toggle" class="icon-btn" title="Quick settings">&#9881;</button>
-              <button id="speak-btn" class="speak-btn" type="button">Speak</button>
+            <div class="actions-row">
+              <div class="actions">
+                <input id="image-file" type="file" accept="image/*" hidden />
+                <input id="text-file" type="file" hidden />
+                <button id="image-btn" class="icon-btn" title="Read text from an image (or drag/drop or paste one into the box)">&#128247;</button>
+                <button id="snip-btn" class="icon-btn" title="Snip part of your screen to read text from">&#9986;&#65039;</button>
+                <button id="attach-btn" class="icon-btn" title="Attach a text file (or drag/drop one into the box)">&#128206;</button>
+                <button id="settings-toggle" class="icon-btn" title="Quick settings">&#9881;</button>
+                <button id="speak-btn" class="speak-btn" type="button">Speak</button>
+              </div>
             </div>
-          </div>
-          <div id="chunk-row" class="row chunk-row" hidden>
-            <button id="chunk-stop" class="text-btn" type="button">Stop</button>
+            <div id="chunk-row" class="chunk-row" hidden>
+              <button id="chunk-stop" class="text-btn" type="button">Stop</button>
+            </div>
           </div>
           <div class="row">
             <span id="target-name" class="target"></span>

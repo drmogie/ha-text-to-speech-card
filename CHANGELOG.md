@@ -2,6 +2,10 @@
 
 All notable changes to this card are documented here. Versions follow `YYYY.MM.DD.#`.
 
+## 2026.09.17.5
+- Fixed the chunk navigation arrows overlapping/hiding under the text box, and reworked the whole control-row layout to actually be responsive: on a normal-width card, the Previous/indicator/Next arrows sit on the left of the same line as the icon buttons and Speak/Pause (right), with Stop alone on the line below; on a narrow card, the icon buttons/Speak move to their own line, and the arrows (left) and Stop (right) share the line below that. Uses a CSS container query keyed to the card's own width (not the browser window), so it responds correctly regardless of how big the dashboard itself is.
+- Chunks could still occasionally get cut off in their last second or two even with the estimated-duration floor from `2026.09.17.4` - the estimate itself was in the right ballpark, it just didn't leave quite enough margin right at the tail end. Raised the "not playing" confirmation window (1.8s -> 3s) and gave the per-chunk duration estimate a bit more headroom.
+
 ## 2026.09.17.4
 - Fixed chunks still getting cut off mid-line and jumping to the next one even after `2026.09.16.7`'s debounce fix. The debounce only guarded against a brief blip, but a longer multi-sentence chunk can outlast even that on a media_player whose state reporting lags or hiccups - confirmed by the fact that pressing Stop mid-chunk let that same chunk's audio finish correctly on its own once auto-advance was cancelled, meaning the audio was always fine and only the "is it done" check was too eager. Auto-advance now also estimates how long a chunk should realistically take to speak from its word count (roughly 155 words/minute, with a floor for very short chunks) and won't trust ANY "not playing" or "still waiting to hear playing" reading before that estimate has elapsed, on top of the existing debounce and startup-timeout checks.
 
