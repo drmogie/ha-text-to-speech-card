@@ -105,7 +105,7 @@
  * tablet.
  */
 
-const CARD_VERSION = "2026.09.17.6";
+const CARD_VERSION = "2026.09.17.7";
 
 console.info(
   `%c TEXT-TO-SPEECH-CARD %c ${CARD_VERSION} `,
@@ -333,6 +333,16 @@ function probeAudioDurationMs(url) {
     audio.src = url;
     setTimeout(() => finish(null), CHUNK_DURATION_PROBE_TIMEOUT_MS);
   });
+}
+
+// Some HA versions/services reject a call outright when return_response is
+// requested from a service that doesn't support it at all ("An action
+// which does not return responses can't be called with return_response"),
+// rather than just returning no response data - so this has to be caught
+// and treated as "unsupported, fall back" instead of a real speak failure.
+function isReturnResponseUnsupportedError(err) {
+  const message = (err && err.message ? err.message : String(err || "")).toLowerCase();
+  return message.includes("return_response") || message.includes("does not return responses");
 }
 
 function buildChunks(text, splitBy, size) {
@@ -889,6 +899,7 @@ class HaTextToSpeechCard extends HTMLElement {
     this._chunkObservedPlaying = false;
     this._chunkNotPlayingSince = null;
     this._chunkPollTimer = null;
+    this._ttsResponseUnsupported = false; // learned the first time a speak call needs it
     this._targetName = this.shadowRoot.getElementById("target-name");
     this._keepTextCheckbox = this.shadowRoot.getElementById("keep-text");
     this._keepTextCheckbox.checked = this._config.keep_text === true;
@@ -1534,14 +1545,30 @@ class HaTextToSpeechCard extends HTMLElement {
     this._renderChunkDisplay();
 
     try {
-      const result = await this._hass.callService(
-        "tts",
-        "speak",
-        data,
-        { entity_id: ttsEntityId },
-        false,
-        true // request response data - see _probeChunkDuration()
-      );
+      let result;
+      if (!this._ttsResponseUnsupported) {
+        try {
+          result = await this._hass.callService(
+            "tts",
+            "speak",
+            data,
+            { entity_id: ttsEntityId },
+            false,
+            true // request response data - see _probeChunkDuration()
+          );
+        } catch (err) {
+          if (!isReturnResponseUnsupportedError(err)) throw err;
+          // this HA version's tts.speak doesn't support response data at
+          // all - asking for it makes the WHOLE call fail validation
+          // before anything is spoken, so remember that for the rest of
+          // this session and actually retry for real, without it, rather
+          // than silently leaving Speak broken.
+          this._ttsResponseUnsupported = true;
+          result = await this._hass.callService("tts", "speak", data, { entity_id: ttsEntityId });
+        }
+      } else {
+        result = await this._hass.callService("tts", "speak", data, { entity_id: ttsEntityId });
+      }
       this._probeChunkDuration(result, myGeneration);
     } catch (err) {
       this._flashError("Speak failed: " + (err && err.message ? err.message : err));
