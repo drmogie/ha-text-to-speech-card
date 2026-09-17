@@ -57,7 +57,7 @@ Add a new card, search for **Text to Speech Card**, and configure it in the GUI 
 | Speak in chunks | Splits the text and speaks it one chunk at a time instead of all at once, with Pause/Resume/Previous/Next controls. |
 | Split by | Sentences or Words (defaults to Sentences) - only shown when chunked playback is on. |
 | Words/Sentences per chunk | How many words (or sentences) go in each chunk. Defaults to 40 words or 2 sentences if left blank. |
-| Fallback timing buffer (sec) | Extra time added when deciding a chunk is done, only used as a fallback on a speaker that doesn't report precise announcement timing (see below) - drag the slider or type an exact number. Default 0. |
+| Fallback timing adjustment (sec) | Nudges the timing used to decide a chunk is done, only on a speaker that doesn't report precise announcement timing - starts at 0 (the built-in timing, unchanged), positive adds more time, negative trims it. Drag the slider or type an exact number. |
 | Show chunk timing debug info while speaking | Shows a small overlay on the card while a chunked sequence plays, with live info on which timing signal is active and what it's currently seeing - useful for tuning the buffer above or diagnosing a cutoff/gap. |
 
 ## License

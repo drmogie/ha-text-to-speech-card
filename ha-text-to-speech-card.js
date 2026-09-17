@@ -121,7 +121,7 @@
  * tablet.
  */
 
-const CARD_VERSION = "2026.09.17.11";
+const CARD_VERSION = "2026.09.17.12";
 
 console.info(
   `%c TEXT-TO-SPEECH-CARD %c ${CARD_VERSION} `,
@@ -309,21 +309,31 @@ const CHUNK_DURATION_LATENCY_MS = 2800; // rough allowance for synthesis + netwo
 // fallback below needs to avoid cutting speech off early.
 const CHUNK_ANNOUNCE_CONFIRM_MS = 300;
 
-// Editor-configurable range for the "Fallback timing buffer" slider - only
-// ever affects the word-count guess (i.e. only matters on a speaker that
-// doesn't report `is_announcing`), letting it be tuned per-speaker from the
-// card editor instead of needing a code change each time.
-const CHUNK_FALLBACK_BUFFER_MIN_S = 0;
+// Editor-configurable range for the "Fallback timing adjustment" slider -
+// it starts at 0, meaning "use the built-in fallback timing exactly as-is",
+// and can move either direction from there: negative shaves time off (less
+// dead air, more cutoff risk on a slow-reporting speaker), positive adds
+// more (the reverse trade). Only ever affects the word-count guess (i.e.
+// only matters on a speaker that doesn't report `is_announcing`), letting
+// it be tuned per-speaker from the card editor instead of needing a code
+// change each time.
+const CHUNK_FALLBACK_BUFFER_MIN_S = -10;
 const CHUNK_FALLBACK_BUFFER_MAX_S = 15;
 const CHUNK_FALLBACK_BUFFER_STEP_S = 0.5;
 
-function estimateChunkDurationMs(text, extraBufferMs) {
+// However far negative the adjustment above goes, a chunk's estimated
+// duration is never allowed to drop below this - otherwise a large enough
+// negative value could make the estimate hit zero (or go negative) and
+// advance instantly/skip chunks entirely, rather than just being more
+// aggressive about timing.
+const CHUNK_DURATION_HARD_FLOOR_MS = 500;
+
+function estimateChunkDurationMs(text, extraAdjustmentMs) {
   const words = (text || "").trim().split(/\s+/).filter(Boolean).length;
-  return (
+  const base =
     Math.max(CHUNK_DURATION_FLOOR_MS, words * CHUNK_MS_PER_WORD_ESTIMATE) +
-    (extraBufferMs || 0) +
-    CHUNK_DURATION_LATENCY_MS
-  );
+    CHUNK_DURATION_LATENCY_MS;
+  return Math.max(CHUNK_DURATION_HARD_FLOOR_MS, base + (extraAdjustmentMs || 0));
 }
 
 function defaultChunkSize(splitBy) {
@@ -626,13 +636,13 @@ class HaTextToSpeechCard extends HTMLElement {
     return typeof v === "number" && !isNaN(v) && v >= 0 ? v : 2;
   }
 
-  // Extra time (in ms) added on top of the word-count fallback guess only -
-  // set from the "Fallback timing buffer" slider in the editor. Never
-  // touches the precise is_announcing/measured-duration paths, since those
-  // don't need padding.
+  // Adjustment (in ms, positive or negative) applied to the word-count
+  // fallback guess only - set from the "Fallback timing adjustment" slider
+  // in the editor. Never touches the precise is_announcing/measured-
+  // duration paths, since those don't need any adjusting.
   _chunkFallbackBufferMs() {
     const v = this._config && this._config.chunk_fallback_buffer_seconds;
-    return typeof v === "number" && !isNaN(v) && v > 0 ? v * 1000 : 0;
+    return typeof v === "number" && !isNaN(v) ? v * 1000 : 0;
   }
 
   _render() {
@@ -2137,7 +2147,7 @@ class HaTextToSpeechCardEditor extends HTMLElement {
         </div>
         <div id="chunk-buffer-row" hidden>
           <div class="settings-row">
-            <label>Fallback timing buffer (sec)</label>
+            <label>Fallback timing adjustment (sec)</label>
             <div class="buffer-control">
               <input
                 id="chunk_fallback_buffer_slider"
@@ -2155,7 +2165,7 @@ class HaTextToSpeechCardEditor extends HTMLElement {
               />
             </div>
           </div>
-          <p class="hint">Only used as extra padding when the speaker doesn't report precise announcement timing (e.g. Piper Browser Speaker 2026.09.17.1+ doesn't need this). Raise it if chunks still cut off early on your speaker.</p>
+          <p class="hint">Starts at 0 (the built-in fallback timing, unchanged). Raise it if chunks still cut off early on a speaker; lower it (into negative) to trim the pause between chunks if it feels too long. Only used when the speaker doesn't report precise announcement timing - e.g. Piper Browser Speaker 2026.09.17.1+ doesn't need this at all.</p>
         </div>
         <div class="settings-row checkbox-row" id="chunk-debug-row" hidden>
           <label><input id="debug_chunk_info" type="checkbox" /> Show chunk timing debug info while speaking</label>

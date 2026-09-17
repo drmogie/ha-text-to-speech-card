@@ -2,6 +2,9 @@
 
 All notable changes to this card are documented here. Versions follow `YYYY.MM.DD.#`.
 
+## 2026.09.17.12
+- Fixed `2026.09.17.11`'s new "Fallback timing" slider only being able to add extra time, not reduce it - it now starts at 0 (the built-in fallback timing, unchanged) and can be moved either direction: negative shaves time off, positive adds more. Renamed to "Fallback timing adjustment" to reflect that. A large negative value can no longer make a chunk's timing estimate hit zero or go negative (which would skip chunks) - it's floored at half a second no matter how far down the slider goes.
+
 ## 2026.09.17.11
 - Confirmed `2026.09.17.10`'s `is_announcing` fix works as intended (no cutoff, no gap) once Home Assistant is fully restarted and the dashboard hard-refreshed to pick up both updated repos.
 - Added a "Fallback timing buffer" slider (with a paired exact-number box) to the chunked-playback editor settings - extra seconds added on top of the word-count guess, so the fallback timing used on any speaker that doesn't report `is_announcing` can be tuned directly from the editor instead of asking for a code change each time. Only affects that fallback guess; has no effect at all when `is_announcing` is available.
