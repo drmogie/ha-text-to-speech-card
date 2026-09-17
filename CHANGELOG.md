@@ -2,6 +2,9 @@
 
 All notable changes to this card are documented here. Versions follow `YYYY.MM.DD.#`.
 
+## 2026.09.17.15
+- Fixed the "Fallback timing adjustment" slider and its paired number box not mirroring each other while dragging/typing. Home Assistant re-opens the editor's saved config back into it on every committed change anywhere in the editor, and that was landing mid-drag/mid-type and snapping both fields back to the last saved value before the new one could register. Same fix already used on Piper Browser Speaker's own editor: skip re-syncing whichever of the two fields currently has focus.
+
 ## 2026.09.17.14
 - Fixed the Quick settings panel (gear icon) having no reliable way to close once opened - it used to just push the rest of the card content taller, which could shove its own gear-icon toggle button up out of view with nothing left visible to click to close it. It's now a proper popup overlay covering the whole screen with its own clearly-labeled "Quick settings" title and an X button in the top-right corner to close it - also closeable by tapping outside it or pressing Escape, same as the screen-snip tool already worked.
 

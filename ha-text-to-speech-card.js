@@ -121,7 +121,7 @@
  * tablet.
  */
 
-const CARD_VERSION = "2026.09.17.14";
+const CARD_VERSION = "2026.09.17.15";
 
 console.info(
   `%c TEXT-TO-SPEECH-CARD %c ${CARD_VERSION} `,
@@ -2182,8 +2182,17 @@ class HaTextToSpeechCardEditor extends HTMLElement {
           this._config.chunk_fallback_buffer_seconds != null
             ? this._config.chunk_fallback_buffer_seconds
             : 0;
-        this._chunkBufferSlider.value = buffer;
-        this._chunkBufferNumber.value = buffer;
+        // Home Assistant re-calls setConfig() (routing back through here)
+        // on every committed change anywhere in the editor, not just this
+        // field - if that lands while he's mid-drag on the slider or
+        // mid-type in the number box, re-stamping both from the last
+        // COMMITTED config would snap them back before he's done, which
+        // is exactly what made them look out of sync with each other.
+        // Same fix already proven on Piper Browser Speaker's own editor:
+        // skip re-stamping whichever of the two currently has focus.
+        const activeEl = document.activeElement;
+        if (activeEl !== this._chunkBufferSlider) this._chunkBufferSlider.value = buffer;
+        if (activeEl !== this._chunkBufferNumber) this._chunkBufferNumber.value = buffer;
         this._debugChunkInfoCheckbox.checked = this._config.debug_chunk_info === true;
         this._updateChunkFieldsVisibility();
       }
