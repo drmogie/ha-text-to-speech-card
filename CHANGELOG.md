@@ -2,6 +2,9 @@
 
 All notable changes to this card are documented here. Versions follow `YYYY.MM.DD.#`.
 
+## 2026.09.17.14
+- Fixed the Quick settings panel (gear icon) having no reliable way to close once opened - it used to just push the rest of the card content taller, which could shove its own gear-icon toggle button up out of view with nothing left visible to click to close it. It's now a proper popup overlay covering the whole screen with its own clearly-labeled "Quick settings" title and an X button in the top-right corner to close it - also closeable by tapping outside it or pressing Escape, same as the screen-snip tool already worked.
+
 ## 2026.09.17.13
 - Fixed the chunk timing debug panel (added in `2026.09.17.11`) covering the Speak/Pause/Stop row and the gear/settings icon, making both impossible to get to while it was showing (including making the settings panel look stuck open, since the button to close it was hidden underneath). It's no longer pinned on top of anything - it now sits in its own spot below the speaker status line, pushing things down like any other row instead of overlapping them. Also added a small close button on the panel itself so it can be dismissed for the rest of the current sequence without going back into the editor; it reappears the next time Speak is pressed.
 

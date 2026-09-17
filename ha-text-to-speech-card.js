@@ -121,7 +121,7 @@
  * tablet.
  */
 
-const CARD_VERSION = "2026.09.17.13";
+const CARD_VERSION = "2026.09.17.14";
 
 console.info(
   `%c TEXT-TO-SPEECH-CARD %c ${CARD_VERSION} `,
@@ -430,15 +430,68 @@ const SETTINGS_CSS = `
     cursor: default;
     background: none;
   }
+  /* The Quick settings panel is a full modal overlay (like the snip
+     overlay below) rather than inline card content - it used to just push
+     the rest of the card taller when opened, which could shove its own
+     gear-icon toggle button (and everything else) up out of view with no
+     way to get back to it. An overlay is always fully on-screen and has
+     its own explicit close button, so that can't happen regardless of how
+     tall its content gets or how the dashboard is scrolled. */
+  .settings-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    box-sizing: border-box;
+  }
+  .settings-overlay[hidden] { display: none; }
   .settings-panel {
+    position: relative;
+    width: 100%;
+    max-width: 420px;
+    max-height: 85vh;
+    overflow-y: auto;
+    box-sizing: border-box;
     border: 1px solid var(--divider-color, #ccc);
     border-radius: 8px;
-    padding: 12px;
+    padding: 16px;
     display: flex;
     flex-direction: column;
     gap: 10px;
+    background: var(--card-background-color, #fff);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
   }
-  .settings-panel[hidden] { display: none; }
+  .settings-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .settings-panel-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--primary-text-color, #000);
+  }
+  .settings-close {
+    appearance: none;
+    border: none;
+    background: none;
+    color: var(--secondary-text-color, #888);
+    font-size: 20px;
+    line-height: 1;
+    padding: 6px 8px;
+    cursor: pointer;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+  .settings-close:hover {
+    background: var(--secondary-background-color, #f0f0f0);
+    color: var(--primary-text-color, #000);
+  }
   .settings-row {
     display: flex;
     align-items: center;
@@ -604,8 +657,8 @@ class HaTextToSpeechCard extends HTMLElement {
 
   disconnectedCallback() {
     this._stopChunkTimer();
-    if (this._snipEscapeHandler) {
-      window.removeEventListener("keydown", this._snipEscapeHandler);
+    if (this._overlayEscapeHandler) {
+      window.removeEventListener("keydown", this._overlayEscapeHandler);
     }
   }
 
@@ -945,28 +998,34 @@ class HaTextToSpeechCard extends HTMLElement {
             <button id="chunk-debug-close" class="chunk-debug-close" type="button" title="Hide for this sequence">&#10005;</button>
             <div id="chunk-debug-text"></div>
           </div>
-          <div id="settings-panel" class="settings-panel" hidden>
-            <div class="settings-row">
-              <label>Language</label>
-              <select id="quick-language"><option value="">Default</option></select>
-            </div>
-            <div class="settings-row">
-              <label>Voice quality</label>
-              <select id="quick-quality"><option value="">All qualities</option></select>
-            </div>
-            <div class="settings-row">
-              <label>Voice</label>
-              <select id="quick-voice"><option value="">Default voice</option></select>
-            </div>
-            <div class="settings-row checkbox-row">
-              <label><input id="quick-cache" type="checkbox" /> Cache repeated messages</label>
-            </div>
-            <div class="settings-row checkbox-row">
-              <label><input id="keep-text" type="checkbox" /> Keep text after speaking</label>
-            </div>
-            <div class="settings-actions">
-              <span class="hint">Applies to your next message only.</span>
-              <button id="quick-reset" class="text-btn">Reset to saved settings</button>
+          <div id="settings-overlay" class="settings-overlay" hidden>
+            <div id="settings-panel" class="settings-panel">
+              <div class="settings-panel-header">
+                <span class="settings-panel-title">Quick settings</span>
+                <button id="settings-close" class="settings-close" type="button" title="Close">&#10005;</button>
+              </div>
+              <div class="settings-row">
+                <label>Language</label>
+                <select id="quick-language"><option value="">Default</option></select>
+              </div>
+              <div class="settings-row">
+                <label>Voice quality</label>
+                <select id="quick-quality"><option value="">All qualities</option></select>
+              </div>
+              <div class="settings-row">
+                <label>Voice</label>
+                <select id="quick-voice"><option value="">Default voice</option></select>
+              </div>
+              <div class="settings-row checkbox-row">
+                <label><input id="quick-cache" type="checkbox" /> Cache repeated messages</label>
+              </div>
+              <div class="settings-row checkbox-row">
+                <label><input id="keep-text" type="checkbox" /> Keep text after speaking</label>
+              </div>
+              <div class="settings-actions">
+                <span class="hint">Applies to your next message only.</span>
+                <button id="quick-reset" class="text-btn">Reset to saved settings</button>
+              </div>
             </div>
           </div>
           <div id="snip-overlay" class="snip-overlay" hidden>
@@ -1032,7 +1091,9 @@ class HaTextToSpeechCard extends HTMLElement {
     this._keepTextCheckbox = this.shadowRoot.getElementById("keep-text");
     this._keepTextCheckbox.checked = this._config.keep_text === true;
     this._settingsToggleBtn = this.shadowRoot.getElementById("settings-toggle");
+    this._settingsOverlay = this.shadowRoot.getElementById("settings-overlay");
     this._settingsPanel = this.shadowRoot.getElementById("settings-panel");
+    this._settingsCloseBtn = this.shadowRoot.getElementById("settings-close");
     this._quickLanguage = this.shadowRoot.getElementById("quick-language");
     this._quickQuality = this.shadowRoot.getElementById("quick-quality");
     this._quickVoice = this.shadowRoot.getElementById("quick-voice");
@@ -1075,16 +1136,18 @@ class HaTextToSpeechCard extends HTMLElement {
     this._snipOverlay.addEventListener("click", (ev) => {
       if (ev.target === this._snipOverlay) this._closeSnipOverlay();
     });
-    // listened on window rather than the overlay itself - focus normally
-    // stays on the button that opened it, which sits outside the overlay,
+    // listened on window rather than either overlay itself - focus normally
+    // stays on whichever button opened it, which sits outside the overlay,
     // so a keydown there wouldn't bubble through the overlay's own tree.
-    // Stored so disconnectedCallback can remove it and not leak.
-    this._snipEscapeHandler = (ev) => {
-      if (ev.key === "Escape" && this._snipOverlay && !this._snipOverlay.hidden) {
-        this._closeSnipOverlay();
-      }
+    // Handles both overlays (snip and Quick settings) since they're never
+    // open at the same time. Stored so disconnectedCallback can remove it
+    // and not leak.
+    this._overlayEscapeHandler = (ev) => {
+      if (ev.key !== "Escape") return;
+      if (this._snipOverlay && !this._snipOverlay.hidden) this._closeSnipOverlay();
+      if (this._settingsOverlay && !this._settingsOverlay.hidden) this._closeSettings();
     };
-    window.addEventListener("keydown", this._snipEscapeHandler);
+    window.addEventListener("keydown", this._overlayEscapeHandler);
     this._snipCanvas.addEventListener("pointerdown", (ev) => {
       const rect = this._snipCanvas.getBoundingClientRect();
       const x = clamp(ev.clientX - rect.left, 0, rect.width);
@@ -1153,6 +1216,13 @@ class HaTextToSpeechCard extends HTMLElement {
       if (file) this._handleImageFile(file);
     });
     this._settingsToggleBtn.addEventListener("click", () => this._toggleSettings());
+    this._settingsCloseBtn.addEventListener("click", () => this._closeSettings());
+    this._settingsOverlay.addEventListener("click", (ev) => {
+      // clicking the dimmed backdrop closes it too, same as tapping outside
+      // the snip overlay does - only when the click actually landed on the
+      // backdrop itself, not somewhere inside the settings panel
+      if (ev.target === this._settingsOverlay) this._closeSettings();
+    });
     this._quickLanguage.addEventListener("change", () => {
       if (!this._overrides) this._overrides = this._defaultsFromConfig();
       this._overrides.language = this._quickLanguage.value;
@@ -1173,13 +1243,17 @@ class HaTextToSpeechCard extends HTMLElement {
   }
 
   _toggleSettings() {
-    const willShow = this._settingsPanel.hidden;
-    this._settingsPanel.hidden = !willShow;
+    const willShow = this._settingsOverlay.hidden;
+    this._settingsOverlay.hidden = !willShow;
     if (willShow) {
       if (!this._overrides) this._overrides = this._defaultsFromConfig();
       this._quickCache.checked = this._overrides.cache;
       this._loadQuickLanguages();
     }
+  }
+
+  _closeSettings() {
+    this._settingsOverlay.hidden = true;
   }
 
   async _loadQuickLanguages() {
