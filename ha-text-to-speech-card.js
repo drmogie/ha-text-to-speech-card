@@ -121,7 +121,7 @@
  * tablet.
  */
 
-const CARD_VERSION = "2026.09.17.10";
+const CARD_VERSION = "2026.09.17.11";
 
 console.info(
   `%c TEXT-TO-SPEECH-CARD %c ${CARD_VERSION} `,
@@ -309,10 +309,19 @@ const CHUNK_DURATION_LATENCY_MS = 2800; // rough allowance for synthesis + netwo
 // fallback below needs to avoid cutting speech off early.
 const CHUNK_ANNOUNCE_CONFIRM_MS = 300;
 
-function estimateChunkDurationMs(text) {
+// Editor-configurable range for the "Fallback timing buffer" slider - only
+// ever affects the word-count guess (i.e. only matters on a speaker that
+// doesn't report `is_announcing`), letting it be tuned per-speaker from the
+// card editor instead of needing a code change each time.
+const CHUNK_FALLBACK_BUFFER_MIN_S = 0;
+const CHUNK_FALLBACK_BUFFER_MAX_S = 15;
+const CHUNK_FALLBACK_BUFFER_STEP_S = 0.5;
+
+function estimateChunkDurationMs(text, extraBufferMs) {
   const words = (text || "").trim().split(/\s+/).filter(Boolean).length;
   return (
     Math.max(CHUNK_DURATION_FLOOR_MS, words * CHUNK_MS_PER_WORD_ESTIMATE) +
+    (extraBufferMs || 0) +
     CHUNK_DURATION_LATENCY_MS
   );
 }
@@ -439,6 +448,31 @@ const SETTINGS_CSS = `
     border: 1px solid var(--divider-color, #ccc);
     background: var(--card-background-color, #fff);
     color: var(--primary-text-color, #000);
+  }
+  .buffer-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    max-width: 60%;
+  }
+  .buffer-control input[type="range"] {
+    flex: 1;
+    accent-color: var(--primary-color, #03a9f4);
+  }
+  .buffer-control input[type="number"] {
+    width: 56px;
+    flex: none;
+    padding: 6px;
+    border-radius: 6px;
+    border: 1px solid var(--divider-color, #ccc);
+    background: var(--card-background-color, #fff);
+    color: var(--primary-text-color, #000);
+  }
+  .hint {
+    font-size: 11px;
+    color: var(--secondary-text-color, #888);
+    margin: -4px 0 0;
   }
   .checkbox-row label {
     display: flex;
@@ -592,6 +626,15 @@ class HaTextToSpeechCard extends HTMLElement {
     return typeof v === "number" && !isNaN(v) && v >= 0 ? v : 2;
   }
 
+  // Extra time (in ms) added on top of the word-count fallback guess only -
+  // set from the "Fallback timing buffer" slider in the editor. Never
+  // touches the precise is_announcing/measured-duration paths, since those
+  // don't need padding.
+  _chunkFallbackBufferMs() {
+    const v = this._config && this._config.chunk_fallback_buffer_seconds;
+    return typeof v === "number" && !isNaN(v) && v > 0 ? v * 1000 : 0;
+  }
+
   _render() {
     if (!this._config) return;
 
@@ -619,9 +662,27 @@ class HaTextToSpeechCard extends HTMLElement {
           gap: 8px;
           flex: 1;
           min-height: 0;
+          position: relative;
           container-type: inline-size;
           container-name: ha-tts-card;
         }
+        .chunk-debug {
+          position: absolute;
+          right: 8px;
+          bottom: 8px;
+          max-width: 70%;
+          background: rgba(0, 0, 0, 0.82);
+          color: #7CFC7C;
+          font-family: monospace;
+          font-size: 11px;
+          line-height: 1.5;
+          padding: 8px 10px;
+          border-radius: 6px;
+          z-index: 5;
+          pointer-events: none;
+          white-space: pre-wrap;
+        }
+        .chunk-debug[hidden] { display: none; }
         textarea {
           width: 100%;
           min-height: 110px;
@@ -819,6 +880,7 @@ class HaTextToSpeechCard extends HTMLElement {
       </style>
       <ha-card header="${title}">
         <div class="card-content">
+          <div id="chunk-debug" class="chunk-debug" hidden></div>
           <div class="textarea-wrap">
             <textarea
               id="tts-text"
@@ -916,6 +978,7 @@ class HaTextToSpeechCard extends HTMLElement {
     this._chunkNextBtn = this.shadowRoot.getElementById("chunk-next");
     this._chunkStopBtn = this.shadowRoot.getElementById("chunk-stop");
     this._chunkIndicator = this.shadowRoot.getElementById("chunk-indicator");
+    this._chunkDebug = this.shadowRoot.getElementById("chunk-debug");
     this._chunkQueue = null;
     this._chunkIndex = 0;
     this._chunkState = "idle";
@@ -1559,7 +1622,10 @@ class HaTextToSpeechCard extends HTMLElement {
     // real, measured clip length as soon as it's available (usually well
     // before the guess would matter), which is what actually fixes chunks
     // getting cut off: no more guessing at all once we have it.
-    this._chunkMinDurationMs = estimateChunkDurationMs(this._chunkQueue[this._chunkIndex]);
+    this._chunkMinDurationMs = estimateChunkDurationMs(
+      this._chunkQueue[this._chunkIndex],
+      this._chunkFallbackBufferMs()
+    );
     this._chunkDurationIsPrecise = false;
     this._chunkObservedPlaying = false;
     this._chunkNotPlayingSince = null;
@@ -1569,6 +1635,7 @@ class HaTextToSpeechCard extends HTMLElement {
     this._updateChunkButtonLabel();
     this._renderChunkControls();
     this._renderChunkDisplay();
+    this._renderChunkDebug();
 
     try {
       let result;
@@ -1637,6 +1704,7 @@ class HaTextToSpeechCard extends HTMLElement {
     this._stopChunkTimer();
     this._updateChunkButtonLabel();
     this._renderChunkControls();
+    this._renderChunkDebug();
     if (!this._hass || !this._config || !this._config.entity) return;
     try {
       await this._hass.callService(
@@ -1687,6 +1755,7 @@ class HaTextToSpeechCard extends HTMLElement {
     this._updateChunkButtonLabel();
     this._renderChunkControls();
     this._exitChunkDisplayMode();
+    this._renderChunkDebug();
     if (this._keepTextCheckbox && !this._keepTextCheckbox.checked) {
       this._textarea.value = "";
     }
@@ -1711,6 +1780,7 @@ class HaTextToSpeechCard extends HTMLElement {
     this._updateChunkButtonLabel();
     this._renderChunkControls();
     this._exitChunkDisplayMode();
+    this._renderChunkDebug();
     if (!this._hass || !this._config || !this._config.entity) return;
     try {
       await this._hass.callService(
@@ -1743,6 +1813,7 @@ class HaTextToSpeechCard extends HTMLElement {
   // integrations never report one reliably, which used to leave auto-
   // advance stuck needing a manual click for every remaining chunk.
   _checkChunkFinished() {
+    this._renderChunkDebug();
     if (!this._chunkQueue || this._chunkState !== "playing") return;
     if (!this._config || !this._config.entity || !this._hass) return;
 
@@ -1842,6 +1913,48 @@ class HaTextToSpeechCard extends HTMLElement {
     if (this._chunkObservedPlaying || elapsed > Math.max(CHUNK_STARTUP_TIMEOUT_MS, minDuration)) {
       this._advanceChunk();
     }
+  }
+
+  // Live info panel for the "Show chunk timing debug info" editor option -
+  // shows exactly what auto-advance is looking at right now (which signal
+  // it's using, the raw is_announcing value, elapsed vs. minimum-duration
+  // time, etc), so a timing problem can be watched happening instead of
+  // guessed at from the outside. Purely a read of current state - never
+  // changes any playback behavior itself.
+  _renderChunkDebug() {
+    if (!this._chunkDebug) return;
+    const enabled = this._config && this._config.debug_chunk_info === true;
+    if (!enabled || !this._chunkQueue) {
+      this._chunkDebug.hidden = true;
+      return;
+    }
+    this._chunkDebug.hidden = false;
+
+    const state = this._config && this._hass && this._hass.states[this._config.entity];
+    const attrs = state && state.attributes;
+    const hasAnnounceAttr = !!(attrs && attrs.is_announcing !== undefined);
+    const announcingRaw = hasAnnounceAttr ? String(!!attrs.is_announcing) : "n/a";
+
+    let signal = "word estimate (fallback)";
+    if (hasAnnounceAttr) signal = "is_announcing";
+    else if (this._chunkDurationIsPrecise) signal = "measured duration";
+
+    const elapsedMs = this._chunkStartedAt ? Date.now() - this._chunkStartedAt : null;
+    const elapsed = elapsedMs != null ? (elapsedMs / 1000).toFixed(1) + "s" : "-";
+    const minDur =
+      this._chunkMinDurationMs != null ? (this._chunkMinDurationMs / 1000).toFixed(1) + "s" : "-";
+    const notPlayingFor = this._chunkNotPlayingSince
+      ? ((Date.now() - this._chunkNotPlayingSince) / 1000).toFixed(1) + "s"
+      : "-";
+
+    this._chunkDebug.textContent =
+      `chunk ${this._chunkIndex + 1}/${this._chunkQueue.length}  [${this._chunkState}]\n` +
+      `signal: ${signal}\n` +
+      `is_announcing: ${announcingRaw}\n` +
+      `entity state: ${state ? state.state : "n/a"}\n` +
+      `elapsed: ${elapsed}  min: ${minDur}\n` +
+      `observedPlaying: ${!!this._chunkObservedPlaying}\n` +
+      `notPlayingFor: ${notPlayingFor}`;
   }
 
   _advanceChunk() {
@@ -1951,6 +2064,13 @@ class HaTextToSpeechCardEditor extends HTMLElement {
           this._config.chunk_split_by === "words" ? "words" : "sentences";
         this._chunkSizeInput.value =
           this._config.chunk_size != null ? this._config.chunk_size : "";
+        const buffer =
+          this._config.chunk_fallback_buffer_seconds != null
+            ? this._config.chunk_fallback_buffer_seconds
+            : 0;
+        this._chunkBufferSlider.value = buffer;
+        this._chunkBufferNumber.value = buffer;
+        this._debugChunkInfoCheckbox.checked = this._config.debug_chunk_info === true;
         this._updateChunkFieldsVisibility();
       }
       return;
@@ -2015,6 +2135,31 @@ class HaTextToSpeechCardEditor extends HTMLElement {
           <label id="chunk-size-label">Sentences per chunk</label>
           <input id="chunk_size" type="number" min="1" max="200" step="1" />
         </div>
+        <div id="chunk-buffer-row" hidden>
+          <div class="settings-row">
+            <label>Fallback timing buffer (sec)</label>
+            <div class="buffer-control">
+              <input
+                id="chunk_fallback_buffer_slider"
+                type="range"
+                min="${CHUNK_FALLBACK_BUFFER_MIN_S}"
+                max="${CHUNK_FALLBACK_BUFFER_MAX_S}"
+                step="${CHUNK_FALLBACK_BUFFER_STEP_S}"
+              />
+              <input
+                id="chunk_fallback_buffer_number"
+                type="number"
+                min="${CHUNK_FALLBACK_BUFFER_MIN_S}"
+                max="${CHUNK_FALLBACK_BUFFER_MAX_S}"
+                step="${CHUNK_FALLBACK_BUFFER_STEP_S}"
+              />
+            </div>
+          </div>
+          <p class="hint">Only used as extra padding when the speaker doesn't report precise announcement timing (e.g. Piper Browser Speaker 2026.09.17.1+ doesn't need this). Raise it if chunks still cut off early on your speaker.</p>
+        </div>
+        <div class="settings-row checkbox-row" id="chunk-debug-row" hidden>
+          <label><input id="debug_chunk_info" type="checkbox" /> Show chunk timing debug info while speaking</label>
+        </div>
       </div>
     `;
 
@@ -2034,6 +2179,11 @@ class HaTextToSpeechCardEditor extends HTMLElement {
     this._chunkSizeRow = this.querySelector("#chunk-size-row");
     this._chunkSizeLabel = this.querySelector("#chunk-size-label");
     this._chunkSizeInput = this.querySelector("#chunk_size");
+    this._chunkBufferRow = this.querySelector("#chunk-buffer-row");
+    this._chunkBufferSlider = this.querySelector("#chunk_fallback_buffer_slider");
+    this._chunkBufferNumber = this.querySelector("#chunk_fallback_buffer_number");
+    this._chunkDebugRow = this.querySelector("#chunk-debug-row");
+    this._debugChunkInfoCheckbox = this.querySelector("#debug_chunk_info");
 
     if (this._hass) {
       this._entityPicker.hass = this._hass;
@@ -2054,6 +2204,13 @@ class HaTextToSpeechCardEditor extends HTMLElement {
     this._chunkSplitBySelect.value =
       this._config.chunk_split_by === "words" ? "words" : "sentences";
     this._chunkSizeInput.value = this._config.chunk_size != null ? this._config.chunk_size : "";
+    const initialBuffer =
+      this._config.chunk_fallback_buffer_seconds != null
+        ? this._config.chunk_fallback_buffer_seconds
+        : 0;
+    this._chunkBufferSlider.value = initialBuffer;
+    this._chunkBufferNumber.value = initialBuffer;
+    this._debugChunkInfoCheckbox.checked = this._config.debug_chunk_info === true;
     this._updateChunkFieldsVisibility();
 
     this._titleInput.addEventListener("input", (ev) =>
@@ -2104,6 +2261,31 @@ class HaTextToSpeechCardEditor extends HTMLElement {
       const raw = this._chunkSizeInput.value;
       const val = raw === "" ? NaN : parseInt(raw, 10);
       this._valueChanged("chunk_size", raw === "" || isNaN(val) || val < 1 ? "" : val);
+    });
+    // slider and number box mirror each other live (on every drag/keystroke)
+    // but only actually save once a value is committed (drag release /
+    // blur or Enter), same debounce-on-commit pattern as the other numeric
+    // fields here.
+    this._chunkBufferSlider.addEventListener("input", () => {
+      this._chunkBufferNumber.value = this._chunkBufferSlider.value;
+    });
+    this._chunkBufferSlider.addEventListener("change", () => {
+      this._valueChanged(
+        "chunk_fallback_buffer_seconds",
+        this._clampBufferSeconds(this._chunkBufferSlider.value)
+      );
+    });
+    this._chunkBufferNumber.addEventListener("input", () => {
+      this._chunkBufferSlider.value = this._chunkBufferNumber.value;
+    });
+    this._chunkBufferNumber.addEventListener("change", () => {
+      const clamped = this._clampBufferSeconds(this._chunkBufferNumber.value);
+      this._chunkBufferNumber.value = clamped;
+      this._chunkBufferSlider.value = clamped;
+      this._valueChanged("chunk_fallback_buffer_seconds", clamped);
+    });
+    this._debugChunkInfoCheckbox.addEventListener("change", () => {
+      this._valueChanged("debug_chunk_info", this._debugChunkInfoCheckbox.checked);
     });
 
     this._reloadLanguages();
@@ -2166,9 +2348,20 @@ class HaTextToSpeechCardEditor extends HTMLElement {
     const enabled = this._chunkedCheckbox.checked;
     this._chunkSplitRow.hidden = !enabled;
     this._chunkSizeRow.hidden = !enabled;
+    this._chunkBufferRow.hidden = !enabled;
+    this._chunkDebugRow.hidden = !enabled;
     const bySentences = this._chunkSplitBySelect.value === "sentences";
     this._chunkSizeLabel.textContent = bySentences ? "Sentences per chunk" : "Words per chunk";
     this._chunkSizeInput.placeholder = String(defaultChunkSize(bySentences ? "sentences" : "words"));
+  }
+
+  // Keeps the slider and its paired number box from ever holding a value
+  // outside the configured range regardless of which one the user typed
+  // into, or if they type something non-numeric into the number box.
+  _clampBufferSeconds(raw) {
+    const val = parseFloat(raw);
+    if (isNaN(val)) return 0;
+    return clamp(val, CHUNK_FALLBACK_BUFFER_MIN_S, CHUNK_FALLBACK_BUFFER_MAX_S);
   }
 
   _valueChanged(key, value) {

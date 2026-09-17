@@ -2,6 +2,11 @@
 
 All notable changes to this card are documented here. Versions follow `YYYY.MM.DD.#`.
 
+## 2026.09.17.11
+- Confirmed `2026.09.17.10`'s `is_announcing` fix works as intended (no cutoff, no gap) once Home Assistant is fully restarted and the dashboard hard-refreshed to pick up both updated repos.
+- Added a "Fallback timing buffer" slider (with a paired exact-number box) to the chunked-playback editor settings - extra seconds added on top of the word-count guess, so the fallback timing used on any speaker that doesn't report `is_announcing` can be tuned directly from the editor instead of asking for a code change each time. Only affects that fallback guess; has no effect at all when `is_announcing` is available.
+- Added a "Show chunk timing debug info while speaking" editor checkbox - when on, a small overlay on the card shows live info while a chunked sequence plays: which detection signal is active (`is_announcing`, measured duration, or the word-count fallback), the raw attribute value, elapsed vs. minimum time, and the target entity's state - so a timing issue can be watched happening instead of guessed at.
+
 ## 2026.09.17.10
 - Found the actual root cause of chunked playback getting cut off, after `2026.09.17.9`'s timing pass fixed cutoff but left about 2 seconds of dead air between chunks: `tts.speak` plays announcements through a separate "announce" audio channel on the target speaker, and Piper Browser Speaker (the speaker used for testing this) never reported that channel's play/pause/ended events back to Home Assistant - so every earlier fix here was tuning around a state signal (`media_player.<x>.state`) that was structurally blind to whether an announcement was actually still playing. Piper Browser Speaker `2026.09.17.1` adds a real `is_announcing` attribute reported live off those events; this card now uses it as the primary, precise, event-driven "is this chunk done" signal (needing only a brief debounce, not padding) whenever the target entity exposes it, closing the dead-air gap entirely. Falls back to the exact `2026.09.17.9` behavior - unchanged - on any speaker that doesn't expose it, so this can't make anything worse, only better where it's available.
 
