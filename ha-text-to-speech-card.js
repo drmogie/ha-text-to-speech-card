@@ -105,7 +105,7 @@
  * tablet.
  */
 
-const CARD_VERSION = "2026.09.17.1";
+const CARD_VERSION = "2026.09.17.2";
 
 console.info(
   `%c TEXT-TO-SPEECH-CARD %c ${CARD_VERSION} `,
@@ -516,6 +516,7 @@ class HaTextToSpeechCard extends HTMLElement {
           flex-direction: column;
           gap: 8px;
           flex: 1;
+          min-height: 0;
         }
         textarea {
           width: 100%;
@@ -544,12 +545,15 @@ class HaTextToSpeechCard extends HTMLElement {
           position: relative;
           flex: 1;
           display: flex;
+          min-height: 0;
         }
         .textarea-wrap textarea {
           flex: 1;
         }
         .chunk-display {
           flex: 1;
+          min-height: 0;
+          max-height: 100%;
           box-sizing: border-box;
           overflow-y: auto;
           font-family: inherit;
@@ -653,11 +657,14 @@ class HaTextToSpeechCard extends HTMLElement {
         }
         .chunk-row {
           justify-content: space-between;
+          flex-wrap: wrap;
+          row-gap: 4px;
         }
         .chunk-nav {
           display: flex;
           align-items: center;
           gap: 6px;
+          flex-wrap: wrap;
         }
         .chunk-nav .icon-btn {
           width: 28px;
@@ -683,6 +690,14 @@ class HaTextToSpeechCard extends HTMLElement {
             <div id="chunk-display" class="chunk-display" hidden></div>
             <button id="clear-btn" class="clear-btn" type="button" title="Clear text">Clear</button>
           </div>
+          <div id="chunk-row" class="row chunk-row" hidden>
+            <div class="chunk-nav">
+              <button id="chunk-prev" class="icon-btn" type="button" title="Previous chunk">&#9664;</button>
+              <span id="chunk-indicator" class="chunk-indicator"></span>
+              <button id="chunk-next" class="icon-btn" type="button" title="Next chunk">&#9654;</button>
+            </div>
+            <button id="chunk-stop" class="text-btn" type="button">Stop</button>
+          </div>
           <div class="row actions-row">
             <div class="actions">
               <input id="image-file" type="file" accept="image/*" hidden />
@@ -693,14 +708,6 @@ class HaTextToSpeechCard extends HTMLElement {
               <button id="settings-toggle" class="icon-btn" title="Quick settings">&#9881;</button>
               <button id="speak-btn" class="speak-btn" type="button">Speak</button>
             </div>
-          </div>
-          <div id="chunk-row" class="row chunk-row" hidden>
-            <div class="chunk-nav">
-              <button id="chunk-prev" class="icon-btn" type="button" title="Previous chunk">&#9664;</button>
-              <span id="chunk-indicator" class="chunk-indicator"></span>
-              <button id="chunk-next" class="icon-btn" type="button" title="Next chunk">&#9654;</button>
-            </div>
-            <button id="chunk-stop" class="text-btn" type="button">Stop</button>
           </div>
           <div class="row">
             <span id="target-name" class="target"></span>
@@ -1356,7 +1363,7 @@ class HaTextToSpeechCard extends HTMLElement {
     }
     const text = (this._textarea.value || "").trim();
     if (!text) return;
-    const splitBy = this._config.chunk_split_by === "sentences" ? "sentences" : "words";
+    const splitBy = this._config.chunk_split_by === "words" ? "words" : "sentences";
     const size = this._config.chunk_size || defaultChunkSize(splitBy);
     const chunks = buildChunks(text, splitBy, size);
     if (!chunks.length) return;
@@ -1668,7 +1675,7 @@ class HaTextToSpeechCardEditor extends HTMLElement {
       if (this._chunkedCheckbox) {
         this._chunkedCheckbox.checked = this._config.chunked_playback === true;
         this._chunkSplitBySelect.value =
-          this._config.chunk_split_by === "sentences" ? "sentences" : "words";
+          this._config.chunk_split_by === "words" ? "words" : "sentences";
         this._chunkSizeInput.value =
           this._config.chunk_size != null ? this._config.chunk_size : "";
         this._updateChunkFieldsVisibility();
@@ -1727,12 +1734,12 @@ class HaTextToSpeechCardEditor extends HTMLElement {
         <div class="settings-row" id="chunk-split-row" hidden>
           <label>Split by</label>
           <select id="chunk_split_by">
-            <option value="words">Words</option>
             <option value="sentences">Sentences</option>
+            <option value="words">Words</option>
           </select>
         </div>
         <div class="settings-row" id="chunk-size-row" hidden>
-          <label id="chunk-size-label">Words per chunk</label>
+          <label id="chunk-size-label">Sentences per chunk</label>
           <input id="chunk_size" type="number" min="1" max="200" step="1" />
         </div>
       </div>
@@ -1772,7 +1779,7 @@ class HaTextToSpeechCardEditor extends HTMLElement {
     this._textFileExtInput.value = this._config.text_file_extensions || "";
     this._chunkedCheckbox.checked = this._config.chunked_playback === true;
     this._chunkSplitBySelect.value =
-      this._config.chunk_split_by === "sentences" ? "sentences" : "words";
+      this._config.chunk_split_by === "words" ? "words" : "sentences";
     this._chunkSizeInput.value = this._config.chunk_size != null ? this._config.chunk_size : "";
     this._updateChunkFieldsVisibility();
 

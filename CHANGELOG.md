@@ -2,6 +2,11 @@
 
 All notable changes to this card are documented here. Versions follow `YYYY.MM.DD.#`.
 
+## 2026.09.17.2
+- Fixed the highlighted chunk-playback view growing past the text box's normal height instead of scrolling inside it - on a real dashboard this could push cards below it down the page or off-screen. It's a classic flexbox sizing gap (a flex child with `overflow-y: auto` still needs `min-height: 0` to actually respect its container's height instead of expanding to fit its content); the text box now stays the same size during playback as it is normally, and scrolls internally to follow the highlighted chunk instead.
+- Moved the chunk navigation row (Previous/Next arrows, "chunk N of M", Stop) to sit directly under the text box instead of below the action-button row, and let it wrap onto a second line on a narrow card instead of squeezing/overflowing.
+- Chunked playback now defaults to splitting by sentences instead of words when "Split by" hasn't been set.
+
 ## 2026.09.17.1
 - Moved the "Keep text after speaking" checkbox off the card face and into the gear-icon Quick settings panel, next to "Cache repeated messages" - one less row cluttering the card itself. It's still a live, this-session choice read at speak time (not part of the saved config), so it's unaffected by "Reset to saved settings", same as before.
 

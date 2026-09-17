@@ -55,7 +55,7 @@ Add a new card, search for **Text to Speech Card**, and configure it in the GUI 
 | Lock button after Speak (seconds) | How long the Speak button stays disabled after a click, regardless of how fast the speak call itself finishes. Default 2. |
 | Attach/drag-drop text file extensions | Which file extensions the paperclip button and drag-and-drop will read as plain text and load into the box. Default `.txt, .md`. |
 | Speak in chunks | Splits the text and speaks it one chunk at a time instead of all at once, with Pause/Resume/Previous/Next controls. |
-| Split by | Words or Sentences - only shown when chunked playback is on. |
+| Split by | Sentences or Words (defaults to Sentences) - only shown when chunked playback is on. |
 | Words/Sentences per chunk | How many words (or sentences) go in each chunk. Defaults to 40 words or 2 sentences if left blank. |
 
 ## License
