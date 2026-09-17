@@ -105,7 +105,7 @@
  * tablet.
  */
 
-const CARD_VERSION = "2026.09.17.3";
+const CARD_VERSION = "2026.09.17.4";
 
 console.info(
   `%c TEXT-TO-SPEECH-CARD %c ${CARD_VERSION} `,
@@ -264,6 +264,28 @@ const CHUNK_STARTUP_TIMEOUT_MS = 6000; // give up waiting for a "playing" pulse 
 const CHUNK_STOP_CONFIRM_MS = 1800; // a "not playing" reading must hold steady this long
 const CHUNK_MAX_WAIT_MS = 45000; // force-advance regardless, so a stuck player can't hang
 const CHUNK_POLL_MS = 1000; // periodic backstop check, independent of hass push events
+
+// Rough estimate of how long a chunk should take to actually speak, so a
+// multi-sentence chunk can't be advanced past early just because some
+// media_player's state reporting blipped or lagged (a genuine reported
+// "not playing" - even one that holds steady past CHUNK_STOP_CONFIRM_MS,
+// or a "playing" pulse that's simply slow to arrive past
+// CHUNK_STARTUP_TIMEOUT_MS - is never trusted before this floor elapses).
+// Deliberately generous (natural speech is usually a bit faster than this)
+// since the cost of guessing too long is a short silent pause, while
+// guessing too short is the exact "cut off mid-line" bug this exists to
+// prevent.
+const CHUNK_MS_PER_WORD_ESTIMATE = 380; // ~155 words/minute
+const CHUNK_DURATION_FLOOR_MS = 2500; // minimum estimate, even for a one-word chunk
+const CHUNK_DURATION_LATENCY_MS = 1200; // rough allowance for synthesis + network before audio starts
+
+function estimateChunkDurationMs(text) {
+  const words = (text || "").trim().split(/\s+/).filter(Boolean).length;
+  return (
+    Math.max(CHUNK_DURATION_FLOOR_MS, words * CHUNK_MS_PER_WORD_ESTIMATE) +
+    CHUNK_DURATION_LATENCY_MS
+  );
+}
 
 function defaultChunkSize(splitBy) {
   return splitBy === "sentences" ? DEFAULT_SENTENCES_PER_CHUNK : DEFAULT_WORDS_PER_CHUNK;
@@ -784,6 +806,7 @@ class HaTextToSpeechCard extends HTMLElement {
     this._chunkIndex = 0;
     this._chunkState = "idle";
     this._chunkStartedAt = null;
+    this._chunkMinDurationMs = null;
     this._chunkObservedPlaying = false;
     this._chunkNotPlayingSince = null;
     this._chunkPollTimer = null;
@@ -1415,6 +1438,7 @@ class HaTextToSpeechCard extends HTMLElement {
 
     this._chunkState = "playing";
     this._chunkStartedAt = Date.now();
+    this._chunkMinDurationMs = estimateChunkDurationMs(this._chunkQueue[this._chunkIndex]);
     this._chunkObservedPlaying = false;
     this._chunkNotPlayingSince = null;
     this._startChunkTimer();
@@ -1481,6 +1505,7 @@ class HaTextToSpeechCard extends HTMLElement {
     this._chunkState = "idle";
     this._stopChunkTimer();
     this._chunkStartedAt = null;
+    this._chunkMinDurationMs = null;
     this._chunkObservedPlaying = false;
     this._chunkNotPlayingSince = null;
     this._updateChunkButtonLabel();
@@ -1503,6 +1528,7 @@ class HaTextToSpeechCard extends HTMLElement {
     this._chunkState = "idle";
     this._stopChunkTimer();
     this._chunkStartedAt = null;
+    this._chunkMinDurationMs = null;
     this._chunkObservedPlaying = false;
     this._chunkNotPlayingSince = null;
     this._updateChunkButtonLabel();
@@ -1544,6 +1570,7 @@ class HaTextToSpeechCard extends HTMLElement {
     if (!this._config || !this._config.entity || !this._hass) return;
 
     const elapsed = Date.now() - (this._chunkStartedAt || 0);
+    const minDuration = this._chunkMinDurationMs || CHUNK_DURATION_FLOOR_MS;
     const state = this._hass.states[this._config.entity];
     const current = state ? state.state : null;
 
@@ -1554,7 +1581,7 @@ class HaTextToSpeechCard extends HTMLElement {
       this._chunkNotPlayingSince = null;
       // stuck reporting "playing" way past any reasonable chunk length -
       // don't let it hang the whole sequence
-      if (elapsed > CHUNK_MAX_WAIT_MS) this._advanceChunk();
+      if (elapsed > Math.max(CHUNK_MAX_WAIT_MS, minDuration * 2)) this._advanceChunk();
       return;
     }
 
@@ -1570,10 +1597,19 @@ class HaTextToSpeechCard extends HTMLElement {
     const notPlayingFor = Date.now() - this._chunkNotPlayingSince;
     if (notPlayingFor < CHUNK_STOP_CONFIRM_MS) return;
 
+    // Even a confirmed, steady "not playing" reading is ignored before the
+    // chunk's own estimated speaking time has passed - a multi-sentence
+    // chunk simply can't be done in under a couple of seconds, no matter
+    // what the media_player claims, and this is what a status-reporting
+    // blip/lag actually looked like in practice (Stop cancelling the
+    // auto-advance timer let the SAME audio finish correctly on its own,
+    // proving the audio itself was fine and only this check was too eager).
+    if (elapsed < minDuration) return;
+
     // confirmed stopped - trust it once we've either seen this chunk
     // actually start playing at some point, or given up waiting for that
     // pulse (this integration may never send one)
-    if (this._chunkObservedPlaying || elapsed > CHUNK_STARTUP_TIMEOUT_MS) {
+    if (this._chunkObservedPlaying || elapsed > Math.max(CHUNK_STARTUP_TIMEOUT_MS, minDuration)) {
       this._advanceChunk();
     }
   }

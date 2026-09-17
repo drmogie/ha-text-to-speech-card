@@ -2,6 +2,9 @@
 
 All notable changes to this card are documented here. Versions follow `YYYY.MM.DD.#`.
 
+## 2026.09.17.4
+- Fixed chunks still getting cut off mid-line and jumping to the next one even after `2026.09.16.7`'s debounce fix. The debounce only guarded against a brief blip, but a longer multi-sentence chunk can outlast even that on a media_player whose state reporting lags or hiccups - confirmed by the fact that pressing Stop mid-chunk let that same chunk's audio finish correctly on its own once auto-advance was cancelled, meaning the audio was always fine and only the "is it done" check was too eager. Auto-advance now also estimates how long a chunk should realistically take to speak from its word count (roughly 155 words/minute, with a floor for very short chunks) and won't trust ANY "not playing" or "still waiting to hear playing" reading before that estimate has elapsed, on top of the existing debounce and startup-timeout checks.
+
 ## 2026.09.17.3
 - Fixed `2026.09.17.2` moving the Stop button above Speak/Pause along with the Previous/Next arrows - only the arrow row (Previous/indicator/Next) was meant to move up under the text box. Stop is back in its usual spot right below the Speak/Pause row.
 
