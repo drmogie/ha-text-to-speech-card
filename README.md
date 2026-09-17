@@ -10,7 +10,7 @@ A Home Assistant Lovelace card: paste or type any amount of text - no 255-charac
 - **Snip text from your own screen.** A scissors button opens the browser's own screen-share picker, grabs one frame, and lets you drag a selection box over just the text you want - it runs through the same OCR as the other image inputs. Desktop browsers only (the underlying browser API isn't available on mobile).
 - **Highlighted chunk playback.** With chunked playback on, the text box switches to a read-only view of your text with whichever chunk is currently being spoken highlighted - it switches back to a normal editable box once the sequence stops.
 - **Saved defaults, editable from the card face.** Set a default language, voice, voice-quality filter, and caching behavior in the GUI editor; a gear-icon "Quick settings" panel on the card lets you override any of them for just your next message, with a permanent "Reset to saved settings" button to snap back.
-- **Keep text after speaking.** An optional checkbox (default on the card face, with a matching saved default) leaves your text in the box instead of clearing it once spoken.
+- **Keep text after speaking.** An optional checkbox in the Quick settings panel (with a matching saved default in the editor) leaves your text in the box instead of clearing it once spoken.
 - **Speak-button lock.** After clicking Speak, the button stays disabled for a configurable minimum time (default 2s) so a fast double-tap can't fire the same message twice.
 - **Optional chunked playback.** Instead of waiting for the whole box to synthesize as one clip before anything plays, split it into chunks (by word count or sentence count) spoken one at a time. Speak becomes Pause/Resume once a sequence starts, with Previous/Next chunk controls and a "chunk N of M" indicator. Resume always replays the current chunk from its start rather than trying to resume mid-clip, since that's the one behavior that's consistent across every media_player.
 - **No YAML required.** Full GUI configuration editor.
@@ -51,7 +51,7 @@ Add a new card, search for **Text to Speech Card**, and configure it in the GUI 
 | Voice quality | Filters the voice list by quality tier (e.g. low/medium/high) when the engine's voice names carry one, like Piper's. |
 | Default voice | Optional saved default voice. |
 | Cache repeated messages by default | Whether repeated identical messages reuse a cached audio clip. |
-| Keep text in box after speaking by default | Whether the text box clears after a successful Speak. |
+| Keep text in box after speaking by default | Whether the text box clears after a successful Speak. Can be overridden per-message from the Quick settings panel. |
 | Lock button after Speak (seconds) | How long the Speak button stays disabled after a click, regardless of how fast the speak call itself finishes. Default 2. |
 | Attach/drag-drop text file extensions | Which file extensions the paperclip button and drag-and-drop will read as plain text and load into the box. Default `.txt, .md`. |
 | Speak in chunks | Splits the text and speaks it one chunk at a time instead of all at once, with Pause/Resume/Previous/Next controls. |

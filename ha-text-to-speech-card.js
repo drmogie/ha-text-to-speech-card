@@ -13,9 +13,9 @@
  * face also has its own "Quick settings" panel (gear icon) for changing any
  * of the TTS options just for your next message, without touching the saved
  * config - a Reset button there snaps back to the saved defaults at any
- * time. The "Keep text after speaking" checkbox lives right on the card
- * face since it's used often - toggling it there is a live, this-session
- * choice too.
+ * time. The "Keep text after speaking" checkbox lives in that same Quick
+ * settings panel - it's a live, this-session choice, not part of the saved
+ * config, so it isn't touched by the Reset button either.
  *
  * Note: there is deliberately no "speed" control. It's not a standard
  * cross-engine TTS option in Home Assistant - some engines support
@@ -105,7 +105,7 @@
  * tablet.
  */
 
-const CARD_VERSION = "2026.09.16.7";
+const CARD_VERSION = "2026.09.17.1";
 
 console.info(
   `%c TEXT-TO-SPEECH-CARD %c ${CARD_VERSION} `,
@@ -599,6 +599,9 @@ class HaTextToSpeechCard extends HTMLElement {
           justify-content: space-between;
           gap: 8px;
         }
+        .actions-row {
+          justify-content: flex-end;
+        }
         .actions {
           display: flex;
           align-items: center;
@@ -613,13 +616,6 @@ class HaTextToSpeechCard extends HTMLElement {
         }
         .target.error {
           color: var(--error-color, #db4437);
-        }
-        .keep-row {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          font-size: 12px;
-          color: var(--secondary-text-color, #888);
         }
         .speak-btn {
           appearance: none;
@@ -687,10 +683,7 @@ class HaTextToSpeechCard extends HTMLElement {
             <div id="chunk-display" class="chunk-display" hidden></div>
             <button id="clear-btn" class="clear-btn" type="button" title="Clear text">Clear</button>
           </div>
-          <div class="row">
-            <label class="keep-row">
-              <input type="checkbox" id="keep-text" /> Keep text after speaking
-            </label>
+          <div class="row actions-row">
             <div class="actions">
               <input id="image-file" type="file" accept="image/*" hidden />
               <input id="text-file" type="file" hidden />
@@ -727,6 +720,9 @@ class HaTextToSpeechCard extends HTMLElement {
             </div>
             <div class="settings-row checkbox-row">
               <label><input id="quick-cache" type="checkbox" /> Cache repeated messages</label>
+            </div>
+            <div class="settings-row checkbox-row">
+              <label><input id="keep-text" type="checkbox" /> Keep text after speaking</label>
             </div>
             <div class="settings-actions">
               <span class="hint">Applies to your next message only.</span>

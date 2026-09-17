@@ -2,6 +2,9 @@
 
 All notable changes to this card are documented here. Versions follow `YYYY.MM.DD.#`.
 
+## 2026.09.17.1
+- Moved the "Keep text after speaking" checkbox off the card face and into the gear-icon Quick settings panel, next to "Cache repeated messages" - one less row cluttering the card itself. It's still a live, this-session choice read at speak time (not part of the saved config), so it's unaffected by "Reset to saved settings", same as before.
+
 ## 2026.09.16.7
 - Fixed chunked playback cutting a chunk off after only its first line/sentence before auto-advancing to the next one. Auto-advance previously acted on the very first "not playing" reading it saw once a chunk had started - but some media_player integrations report a brief gap between sentences or lines within the SAME chunk, which looked identical to the chunk actually finishing. A "not playing" reading now has to hold steady for about 1.8 seconds before it's trusted, so a momentary inter-sentence gap no longer triggers a premature advance.
 
