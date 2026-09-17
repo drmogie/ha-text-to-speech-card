@@ -87,6 +87,22 @@
  * of sync with the text mid-sequence. The textarea comes back once the
  * sequence stops or finishes.
  *
+ * Auto-advance's "is this chunk actually done" check has one more signal
+ * on top of everything above: if the target media_player entity reports
+ * an `is_announcing` attribute (added in Piper Browser Speaker
+ * 2026.09.17.1+), that's used as the primary, precise, event-driven
+ * finish signal instead of the word-count/measured-duration guessing -
+ * it's a real true/false flip the moment that speaker's announcement
+ * audio actually starts and stops, not an estimate, so it needs only a
+ * tiny confirmation buffer instead of the multi-second padding the
+ * guess-based approach needed to avoid cutting a chunk off early. This is
+ * what closed the last couple of seconds of dead air the padding used to
+ * leave between chunks. On any other media_player (or an older Piper
+ * Browser Speaker) that doesn't expose this attribute, chunked playback
+ * falls back to the estimate/state-based approach exactly as before -
+ * this is a strict upgrade, never a regression, for anyone not on that
+ * specific integration/version.
+ *
  * The attach-file button (next to the image button) and dragging a file
  * onto the text box both also accept plain text files now, not just
  * images - a recognized text file's contents replace the box, same as an
@@ -105,7 +121,7 @@
  * tablet.
  */
 
-const CARD_VERSION = "2026.09.17.9";
+const CARD_VERSION = "2026.09.17.10";
 
 console.info(
   `%c TEXT-TO-SPEECH-CARD %c ${CARD_VERSION} `,
@@ -284,6 +300,14 @@ const CHUNK_POLL_MS = 1000; // periodic backstop check, independent of hass push
 const CHUNK_MS_PER_WORD_ESTIMATE = 520; // ~115 words/minute
 const CHUNK_DURATION_FLOOR_MS = 3000; // minimum estimate, even for a one-word chunk
 const CHUNK_DURATION_LATENCY_MS = 2800; // rough allowance for synthesis + network before audio starts
+
+// A media_player's `is_announcing` attribute (when present - see the
+// header comment) is a real event fired the instant that speaker's
+// announcement audio actually stops, not a guess, so "not announcing"
+// only needs a short debounce against a theoretical same-tick flicker -
+// nothing like the multi-second CHUNK_STOP_CONFIRM_MS the guess-based
+// fallback below needs to avoid cutting speech off early.
+const CHUNK_ANNOUNCE_CONFIRM_MS = 300;
 
 function estimateChunkDurationMs(text) {
   const words = (text || "").trim().split(/\s+/).filter(Boolean).length;
@@ -1724,21 +1748,60 @@ class HaTextToSpeechCard extends HTMLElement {
 
     const elapsed = Date.now() - (this._chunkStartedAt || 0);
     const minDuration = this._chunkMinDurationMs || CHUNK_DURATION_FLOOR_MS;
+    const state = this._hass.states[this._config.entity];
+
+    // Best signal available: a real is_announcing attribute (Piper Browser
+    // Speaker 2026.09.17.1+ and anything else that chooses to expose one),
+    // reported live off the actual announcement audio's own play/pause/
+    // ended events on that speaker - not a guess about how long speech
+    // "should" take. When it's present it takes priority over everything
+    // else below, and needs only a short debounce rather than multi-
+    // second padding, since it's precise rather than estimated.
+    const announcing =
+      state && state.attributes && state.attributes.is_announcing !== undefined
+        ? !!state.attributes.is_announcing
+        : null;
+
+    if (announcing !== null) {
+      if (announcing) {
+        this._chunkObservedPlaying = true;
+        this._chunkNotPlayingSince = null;
+        // guard against a stuck "true" forever (e.g. a media error on the
+        // speaker that never fires its own "ended") - same outer safety
+        // net as the other paths use
+        if (elapsed > Math.max(CHUNK_MAX_WAIT_MS, minDuration * 2)) this._advanceChunk();
+        return;
+      }
+      if (elapsed < CHUNK_START_GRACE_MS) return; // hasn't actually started yet
+      if (!this._chunkObservedPlaying) {
+        // never saw it flip true - give it the same startup grace the
+        // fallback path uses before assuming something's wrong
+        if (elapsed < CHUNK_STARTUP_TIMEOUT_MS) return;
+        this._advanceChunk();
+        return;
+      }
+      // it was observed announcing and is now reporting it stopped - a
+      // real event, so only a brief debounce is needed before trusting it
+      if (this._chunkNotPlayingSince == null) this._chunkNotPlayingSince = Date.now();
+      if (Date.now() - this._chunkNotPlayingSince < CHUNK_ANNOUNCE_CONFIRM_MS) return;
+      this._advanceChunk();
+      return;
+    }
 
     // Once _probeChunkDuration() has measured this chunk's ACTUAL clip
     // length (not just guessed it from word count), trust that directly
     // rather than also waiting on the target media_player's own state -
     // that state reporting is exactly what's been unreliable across every
-    // earlier attempt at this bug. This is the real fix; everything below
-    // this block is the fallback for when a measurement isn't available
-    // (older HA versions that don't return tts.speak response data, or the
-    // probe itself failing/timing out).
+    // earlier attempt at this bug. This is the fallback for when neither
+    // is_announcing nor a measurement is available (an entity that
+    // doesn't expose is_announcing, on an older HA version that also
+    // doesn't return tts.speak response data, or the probe itself
+    // failing/timing out).
     if (this._chunkDurationIsPrecise) {
       if (elapsed >= minDuration) this._advanceChunk();
       return;
     }
 
-    const state = this._hass.states[this._config.entity];
     const current = state ? state.state : null;
 
     if (current === "playing") {

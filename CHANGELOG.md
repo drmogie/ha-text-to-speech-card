@@ -2,6 +2,9 @@
 
 All notable changes to this card are documented here. Versions follow `YYYY.MM.DD.#`.
 
+## 2026.09.17.10
+- Found the actual root cause of chunked playback getting cut off, after `2026.09.17.9`'s timing pass fixed cutoff but left about 2 seconds of dead air between chunks: `tts.speak` plays announcements through a separate "announce" audio channel on the target speaker, and Piper Browser Speaker (the speaker used for testing this) never reported that channel's play/pause/ended events back to Home Assistant - so every earlier fix here was tuning around a state signal (`media_player.<x>.state`) that was structurally blind to whether an announcement was actually still playing. Piper Browser Speaker `2026.09.17.1` adds a real `is_announcing` attribute reported live off those events; this card now uses it as the primary, precise, event-driven "is this chunk done" signal (needing only a brief debounce, not padding) whenever the target entity exposes it, closing the dead-air gap entirely. Falls back to the exact `2026.09.17.9` behavior - unchanged - on any speaker that doesn't expose it, so this can't make anything worse, only better where it's available.
+
 ## 2026.09.17.9
 - One more timing pass - the longest chunk was reported as coming up only about 4 words short at the end. Raised the flat latency allowance (which closes a shortfall regardless of chunk length) and the per-word rate a bit further.
 
