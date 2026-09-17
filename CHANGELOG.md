@@ -2,6 +2,9 @@
 
 All notable changes to this card are documented here. Versions follow `YYYY.MM.DD.#`.
 
+## 2026.09.17.8
+- Nudged the chunk-timing estimate up a bit more after a report that the longest section tested was still getting cut off, though closer than before. Raised the per-word speaking-rate estimate (~143 -> ~130 words/minute) since that's the part that scales with a chunk's length, plus a bit more flat buffer and confirmation time on top.
+
 ## 2026.09.17.7
 - Fixed `2026.09.17.6` breaking Speak entirely with "Validation error: An action which does not return responses can't be called with return_response=True" - his HA version's `tts.speak` doesn't support response data at all, and asking for it rejects the WHOLE call before anything is spoken (not a graceful "no data back" like assumed). Now catches that specific error, remembers it for the rest of the session, and actually retries the same speak for real without asking for a response - chunked playback falls back to the previous word-count-estimate timing exactly as it did in `.17.5` on any HA version where this isn't supported.
 

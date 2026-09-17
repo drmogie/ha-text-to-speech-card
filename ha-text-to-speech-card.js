@@ -105,7 +105,7 @@
  * tablet.
  */
 
-const CARD_VERSION = "2026.09.17.7";
+const CARD_VERSION = "2026.09.17.8";
 
 console.info(
   `%c TEXT-TO-SPEECH-CARD %c ${CARD_VERSION} `,
@@ -261,7 +261,7 @@ const DEFAULT_SENTENCES_PER_CHUNK = 2;
 // for why this is time-based rather than purely state-pulse-based.
 const CHUNK_START_GRACE_MS = 1500; // never trust a "not playing" reading before this
 const CHUNK_STARTUP_TIMEOUT_MS = 6000; // give up waiting for a "playing" pulse after this
-const CHUNK_STOP_CONFIRM_MS = 3000; // a "not playing" reading must hold steady this long
+const CHUNK_STOP_CONFIRM_MS = 3500; // a "not playing" reading must hold steady this long
 const CHUNK_MAX_WAIT_MS = 45000; // force-advance regardless, so a stuck player can't hang
 const CHUNK_POLL_MS = 1000; // periodic backstop check, independent of hass push events
 
@@ -274,14 +274,16 @@ const CHUNK_POLL_MS = 1000; // periodic backstop check, independent of hass push
 // Deliberately generous (natural speech is usually a bit faster than this)
 // since the cost of guessing too long is a short silent pause, while
 // guessing too short is the exact "cut off mid-line" bug this exists to
-// prevent. Bumped up a notch (and CHUNK_STOP_CONFIRM_MS above raised too)
-// after a report that a chunk was still occasionally getting cut off in
-// its last second or two even with the first version of this estimate -
-// the estimate itself was roughly right, it just didn't leave quite enough
-// margin at the tail end of a chunk.
-const CHUNK_MS_PER_WORD_ESTIMATE = 420; // ~143 words/minute
+// prevent. Bumped up a couple of times (and CHUNK_STOP_CONFIRM_MS above
+// raised alongside it each time) after reports that a chunk was still
+// occasionally getting cut off in its last second or two - the estimate
+// itself has been roughly right each time, it just hasn't left quite
+// enough margin, especially on the longest chunks (the per-word rate is
+// what scales with a chunk's length, so that's the one to keep nudging up
+// if a long chunk is still getting clipped).
+const CHUNK_MS_PER_WORD_ESTIMATE = 460; // ~130 words/minute
 const CHUNK_DURATION_FLOOR_MS = 3000; // minimum estimate, even for a one-word chunk
-const CHUNK_DURATION_LATENCY_MS = 1500; // rough allowance for synthesis + network before audio starts
+const CHUNK_DURATION_LATENCY_MS = 1800; // rough allowance for synthesis + network before audio starts
 
 function estimateChunkDurationMs(text) {
   const words = (text || "").trim().split(/\s+/).filter(Boolean).length;
