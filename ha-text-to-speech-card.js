@@ -121,7 +121,7 @@
  * tablet.
  */
 
-const CARD_VERSION = "2026.09.17.12";
+const CARD_VERSION = "2026.09.17.13";
 
 console.info(
   `%c TEXT-TO-SPEECH-CARD %c ${CARD_VERSION} `,
@@ -676,23 +676,40 @@ class HaTextToSpeechCard extends HTMLElement {
           container-type: inline-size;
           container-name: ha-tts-card;
         }
+        /* Deliberately laid out in the normal flow (not floated/overlaid on
+           top of anything) - an earlier version pinned this to the card's
+           bottom-right corner, which ended up sitting right on top of the
+           Speak/Pause/Stop row and the gear icon, blocking them instead of
+           just informing. This just adds its own height to the card like
+           any other row, so it can never cover a button. */
         .chunk-debug {
-          position: absolute;
-          right: 8px;
-          bottom: 8px;
-          max-width: 70%;
+          position: relative;
           background: rgba(0, 0, 0, 0.82);
           color: #7CFC7C;
           font-family: monospace;
           font-size: 11px;
           line-height: 1.5;
-          padding: 8px 10px;
+          padding: 8px 28px 8px 10px;
           border-radius: 6px;
-          z-index: 5;
-          pointer-events: none;
           white-space: pre-wrap;
         }
         .chunk-debug[hidden] { display: none; }
+        .chunk-debug-close {
+          position: absolute;
+          top: 4px;
+          right: 4px;
+          appearance: none;
+          border: none;
+          background: none;
+          color: #7CFC7C;
+          font-family: monospace;
+          font-size: 14px;
+          line-height: 1;
+          padding: 2px 6px;
+          cursor: pointer;
+          opacity: 0.8;
+        }
+        .chunk-debug-close:hover { opacity: 1; }
         textarea {
           width: 100%;
           min-height: 110px;
@@ -890,7 +907,6 @@ class HaTextToSpeechCard extends HTMLElement {
       </style>
       <ha-card header="${title}">
         <div class="card-content">
-          <div id="chunk-debug" class="chunk-debug" hidden></div>
           <div class="textarea-wrap">
             <textarea
               id="tts-text"
@@ -924,6 +940,10 @@ class HaTextToSpeechCard extends HTMLElement {
           </div>
           <div class="row">
             <span id="target-name" class="target"></span>
+          </div>
+          <div id="chunk-debug" class="chunk-debug" hidden>
+            <button id="chunk-debug-close" class="chunk-debug-close" type="button" title="Hide for this sequence">&#10005;</button>
+            <div id="chunk-debug-text"></div>
           </div>
           <div id="settings-panel" class="settings-panel" hidden>
             <div class="settings-row">
@@ -989,6 +1009,15 @@ class HaTextToSpeechCard extends HTMLElement {
     this._chunkStopBtn = this.shadowRoot.getElementById("chunk-stop");
     this._chunkIndicator = this.shadowRoot.getElementById("chunk-indicator");
     this._chunkDebug = this.shadowRoot.getElementById("chunk-debug");
+    this._chunkDebugText = this.shadowRoot.getElementById("chunk-debug-text");
+    this._chunkDebugCloseBtn = this.shadowRoot.getElementById("chunk-debug-close");
+    this._chunkDebugCloseBtn.addEventListener("click", () => {
+      // dismiss just for the rest of THIS sequence, not the editor setting -
+      // it comes back on the next Speak so it's still there next time it's
+      // actually wanted, without having to dig back into the card editor
+      this._chunkDebugDismissed = true;
+      this._renderChunkDebug();
+    });
     this._chunkQueue = null;
     this._chunkIndex = 0;
     this._chunkState = "idle";
@@ -1588,6 +1617,7 @@ class HaTextToSpeechCard extends HTMLElement {
 
     this._chunkQueue = chunks;
     this._chunkIndex = 0;
+    this._chunkDebugDismissed = false; // a fresh sequence brings the debug panel back, if it's on
     this._enterChunkDisplayMode();
 
     // same double-tap lock as a normal Speak click, but only for kicking
@@ -1934,7 +1964,7 @@ class HaTextToSpeechCard extends HTMLElement {
   _renderChunkDebug() {
     if (!this._chunkDebug) return;
     const enabled = this._config && this._config.debug_chunk_info === true;
-    if (!enabled || !this._chunkQueue) {
+    if (!enabled || !this._chunkQueue || this._chunkDebugDismissed) {
       this._chunkDebug.hidden = true;
       return;
     }
@@ -1957,7 +1987,7 @@ class HaTextToSpeechCard extends HTMLElement {
       ? ((Date.now() - this._chunkNotPlayingSince) / 1000).toFixed(1) + "s"
       : "-";
 
-    this._chunkDebug.textContent =
+    this._chunkDebugText.textContent =
       `chunk ${this._chunkIndex + 1}/${this._chunkQueue.length}  [${this._chunkState}]\n` +
       `signal: ${signal}\n` +
       `is_announcing: ${announcingRaw}\n` +
