@@ -2,6 +2,9 @@
 
 All notable changes to this card are documented here. Versions follow `YYYY.MM.DD.#`.
 
+## 2026.09.17.9
+- One more timing pass - the longest chunk was reported as coming up only about 4 words short at the end. Raised the flat latency allowance (which closes a shortfall regardless of chunk length) and the per-word rate a bit further.
+
 ## 2026.09.17.8
 - Nudged the chunk-timing estimate up a bit more after a report that the longest section tested was still getting cut off, though closer than before. Raised the per-word speaking-rate estimate (~143 -> ~130 words/minute) since that's the part that scales with a chunk's length, plus a bit more flat buffer and confirmation time on top.
 
