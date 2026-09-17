@@ -105,7 +105,7 @@
  * tablet.
  */
 
-const CARD_VERSION = "2026.09.17.2";
+const CARD_VERSION = "2026.09.17.3";
 
 console.info(
   `%c TEXT-TO-SPEECH-CARD %c ${CARD_VERSION} `,
@@ -656,7 +656,10 @@ class HaTextToSpeechCard extends HTMLElement {
           transform: none;
         }
         .chunk-row {
-          justify-content: space-between;
+          justify-content: flex-end;
+        }
+        .chunk-nav-row {
+          justify-content: flex-start;
           flex-wrap: wrap;
           row-gap: 4px;
         }
@@ -690,13 +693,12 @@ class HaTextToSpeechCard extends HTMLElement {
             <div id="chunk-display" class="chunk-display" hidden></div>
             <button id="clear-btn" class="clear-btn" type="button" title="Clear text">Clear</button>
           </div>
-          <div id="chunk-row" class="row chunk-row" hidden>
+          <div id="chunk-nav-row" class="row chunk-nav-row" hidden>
             <div class="chunk-nav">
               <button id="chunk-prev" class="icon-btn" type="button" title="Previous chunk">&#9664;</button>
               <span id="chunk-indicator" class="chunk-indicator"></span>
               <button id="chunk-next" class="icon-btn" type="button" title="Next chunk">&#9654;</button>
             </div>
-            <button id="chunk-stop" class="text-btn" type="button">Stop</button>
           </div>
           <div class="row actions-row">
             <div class="actions">
@@ -708,6 +710,9 @@ class HaTextToSpeechCard extends HTMLElement {
               <button id="settings-toggle" class="icon-btn" title="Quick settings">&#9881;</button>
               <button id="speak-btn" class="speak-btn" type="button">Speak</button>
             </div>
+          </div>
+          <div id="chunk-row" class="row chunk-row" hidden>
+            <button id="chunk-stop" class="text-btn" type="button">Stop</button>
           </div>
           <div class="row">
             <span id="target-name" class="target"></span>
@@ -770,6 +775,7 @@ class HaTextToSpeechCard extends HTMLElement {
     this._snipDragState = null;
     this._chunkDisplay = this.shadowRoot.getElementById("chunk-display");
     this._chunkRow = this.shadowRoot.getElementById("chunk-row");
+    this._chunkNavRow = this.shadowRoot.getElementById("chunk-nav-row");
     this._chunkPrevBtn = this.shadowRoot.getElementById("chunk-prev");
     this._chunkNextBtn = this.shadowRoot.getElementById("chunk-next");
     this._chunkStopBtn = this.shadowRoot.getElementById("chunk-stop");
@@ -1597,6 +1603,7 @@ class HaTextToSpeechCard extends HTMLElement {
     if (!this._chunkRow) return;
     const active = !!this._chunkQueue;
     this._chunkRow.hidden = !active;
+    if (this._chunkNavRow) this._chunkNavRow.hidden = !active;
     if (active) {
       this._chunkIndicator.textContent = `${this._chunkIndex + 1} of ${this._chunkQueue.length}`;
       this._chunkPrevBtn.disabled = this._chunkIndex <= 0;

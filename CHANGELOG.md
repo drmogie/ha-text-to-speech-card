@@ -2,6 +2,9 @@
 
 All notable changes to this card are documented here. Versions follow `YYYY.MM.DD.#`.
 
+## 2026.09.17.3
+- Fixed `2026.09.17.2` moving the Stop button above Speak/Pause along with the Previous/Next arrows - only the arrow row (Previous/indicator/Next) was meant to move up under the text box. Stop is back in its usual spot right below the Speak/Pause row.
+
 ## 2026.09.17.2
 - Fixed the highlighted chunk-playback view growing past the text box's normal height instead of scrolling inside it - on a real dashboard this could push cards below it down the page or off-screen. It's a classic flexbox sizing gap (a flex child with `overflow-y: auto` still needs `min-height: 0` to actually respect its container's height instead of expanding to fit its content); the text box now stays the same size during playback as it is normally, and scrolls internally to follow the highlighted chunk instead.
 - Moved the chunk navigation row (Previous/Next arrows, "chunk N of M", Stop) to sit directly under the text box instead of below the action-button row, and let it wrap onto a second line on a narrow card instead of squeezing/overflowing.
