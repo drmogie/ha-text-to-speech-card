@@ -105,7 +105,7 @@
  * tablet.
  */
 
-const CARD_VERSION = "2026.09.17.5";
+const CARD_VERSION = "2026.09.17.6";
 
 console.info(
   `%c TEXT-TO-SPEECH-CARD %c ${CARD_VERSION} `,
@@ -293,6 +293,46 @@ function estimateChunkDurationMs(text) {
 
 function defaultChunkSize(splitBy) {
   return splitBy === "sentences" ? DEFAULT_SENTENCES_PER_CHUNK : DEFAULT_WORDS_PER_CHUNK;
+}
+
+// Small safety margin added on top of a MEASURED clip duration (from
+// _probeChunkDuration) before trusting it - the probe measures how long
+// the audio file itself is, but there's still a little real-world slack
+// between "we measured this" and "the target speaker's actual playback
+// finishes" (decode/output latency on the target device, etc).
+const CHUNK_PRECISE_BUFFER_MS = 500;
+const CHUNK_DURATION_PROBE_TIMEOUT_MS = 4000; // give up on the probe and keep the guess after this
+
+// Loads a media URL into a throwaway <audio> element just far enough to
+// read its real `duration`, without ever playing it audibly (the target
+// media_player is what actually plays the clip out loud - this is a
+// second, silent load of the same file purely to measure it). Resolves to
+// the duration in milliseconds, or null if the URL fails to load or the
+// probe times out (e.g. a slow/unreachable network) - callers fall back
+// to the word-count guess in that case.
+function probeAudioDurationMs(url) {
+  return new Promise((resolve) => {
+    let done = false;
+    const audio = new Audio();
+    const finish = (result) => {
+      if (done) return;
+      done = true;
+      audio.removeEventListener("loadedmetadata", onMeta);
+      audio.removeEventListener("error", onError);
+      audio.src = "";
+      resolve(result);
+    };
+    const onMeta = () => {
+      const d = audio.duration;
+      finish(Number.isFinite(d) && d > 0 ? Math.round(d * 1000) : null);
+    };
+    const onError = () => finish(null);
+    audio.addEventListener("loadedmetadata", onMeta);
+    audio.addEventListener("error", onError);
+    audio.preload = "metadata";
+    audio.src = url;
+    setTimeout(() => finish(null), CHUNK_DURATION_PROBE_TIMEOUT_MS);
+  });
 }
 
 function buildChunks(text, splitBy, size) {
@@ -845,6 +885,7 @@ class HaTextToSpeechCard extends HTMLElement {
     this._chunkState = "idle";
     this._chunkStartedAt = null;
     this._chunkMinDurationMs = null;
+    this._chunkDurationIsPrecise = false;
     this._chunkObservedPlaying = false;
     this._chunkNotPlayingSince = null;
     this._chunkPollTimer = null;
@@ -1476,20 +1517,63 @@ class HaTextToSpeechCard extends HTMLElement {
 
     this._chunkState = "playing";
     this._chunkStartedAt = Date.now();
+    // Word-count guess up front so playback timing has *something* to go
+    // on immediately - _probeChunkDuration() below replaces this with the
+    // real, measured clip length as soon as it's available (usually well
+    // before the guess would matter), which is what actually fixes chunks
+    // getting cut off: no more guessing at all once we have it.
     this._chunkMinDurationMs = estimateChunkDurationMs(this._chunkQueue[this._chunkIndex]);
+    this._chunkDurationIsPrecise = false;
     this._chunkObservedPlaying = false;
     this._chunkNotPlayingSince = null;
+    this._chunkGeneration = (this._chunkGeneration || 0) + 1;
+    const myGeneration = this._chunkGeneration;
     this._startChunkTimer();
     this._updateChunkButtonLabel();
     this._renderChunkControls();
     this._renderChunkDisplay();
 
     try {
-      await this._hass.callService("tts", "speak", data, { entity_id: ttsEntityId });
+      const result = await this._hass.callService(
+        "tts",
+        "speak",
+        data,
+        { entity_id: ttsEntityId },
+        false,
+        true // request response data - see _probeChunkDuration()
+      );
+      this._probeChunkDuration(result, myGeneration);
     } catch (err) {
       this._flashError("Speak failed: " + (err && err.message ? err.message : err));
       this._cancelChunks();
     }
+  }
+
+  // tts.speak can return the actual generated clip's URL as response data
+  // (HA versions that support it - older ones simply won't, and this is a
+  // no-op fallback to the word-count guess in that case). When we get a
+  // URL, load it into a throwaway <audio> element just far enough to read
+  // its real `duration` - the exact length of the clip that's now playing
+  // on the target speaker - and use THAT instead of a guess. This is what
+  // actually solves chunks getting cut off, rather than tuning how
+  // cautious the word-count guess and its safety margins are: previous
+  // fixes (debounce, then a duration estimate) each narrowed the problem
+  // without eliminating it, because they were all still guessing.
+  async _probeChunkDuration(serviceCallResult, generation) {
+    const url =
+      (serviceCallResult &&
+        serviceCallResult.response &&
+        (serviceCallResult.response.url || serviceCallResult.response.path)) ||
+      null;
+    if (!url || typeof url !== "string") return; // unsupported HA version - keep the guess
+
+    const measuredMs = await probeAudioDurationMs(url);
+    // the sequence may have moved on (manual Next/Prev, Stop, or a new
+    // chunk already started) by the time this resolves - only apply it if
+    // we're still timing the same chunk it was measured for
+    if (!measuredMs || this._chunkGeneration !== generation) return;
+    this._chunkMinDurationMs = measuredMs + CHUNK_PRECISE_BUFFER_MS;
+    this._chunkDurationIsPrecise = true;
   }
 
   async _pauseChunks() {
@@ -1544,6 +1628,7 @@ class HaTextToSpeechCard extends HTMLElement {
     this._stopChunkTimer();
     this._chunkStartedAt = null;
     this._chunkMinDurationMs = null;
+    this._chunkDurationIsPrecise = false;
     this._chunkObservedPlaying = false;
     this._chunkNotPlayingSince = null;
     this._updateChunkButtonLabel();
@@ -1567,6 +1652,7 @@ class HaTextToSpeechCard extends HTMLElement {
     this._stopChunkTimer();
     this._chunkStartedAt = null;
     this._chunkMinDurationMs = null;
+    this._chunkDurationIsPrecise = false;
     this._chunkObservedPlaying = false;
     this._chunkNotPlayingSince = null;
     this._updateChunkButtonLabel();
@@ -1609,6 +1695,20 @@ class HaTextToSpeechCard extends HTMLElement {
 
     const elapsed = Date.now() - (this._chunkStartedAt || 0);
     const minDuration = this._chunkMinDurationMs || CHUNK_DURATION_FLOOR_MS;
+
+    // Once _probeChunkDuration() has measured this chunk's ACTUAL clip
+    // length (not just guessed it from word count), trust that directly
+    // rather than also waiting on the target media_player's own state -
+    // that state reporting is exactly what's been unreliable across every
+    // earlier attempt at this bug. This is the real fix; everything below
+    // this block is the fallback for when a measurement isn't available
+    // (older HA versions that don't return tts.speak response data, or the
+    // probe itself failing/timing out).
+    if (this._chunkDurationIsPrecise) {
+      if (elapsed >= minDuration) this._advanceChunk();
+      return;
+    }
+
     const state = this._hass.states[this._config.entity];
     const current = state ? state.state : null;
 

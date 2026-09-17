@@ -2,6 +2,9 @@
 
 All notable changes to this card are documented here. Versions follow `YYYY.MM.DD.#`.
 
+## 2026.09.17.6
+- Rebuilt how chunked playback decides a chunk is finished, since three earlier attempts (a debounce, then a word-count duration estimate, then widening its margins) each narrowed the "cut off mid-line" bug without eliminating it - all of them were still ultimately guessing. `tts.speak` now asks Home Assistant for its response data, which (on HA versions that support it) includes the actual generated audio clip's URL; the card silently loads that same clip in the background just far enough to read its real, exact duration, and times the chunk against that measured length instead of a guess or the target speaker's own state reporting. Falls back to the previous word-count-estimate behavior untouched on older HA versions, or if anything about the probe fails - this is a strict upgrade, not a replacement that can leave you worse off.
+
 ## 2026.09.17.5
 - Fixed the chunk navigation arrows overlapping/hiding under the text box, and reworked the whole control-row layout to actually be responsive: on a normal-width card, the Previous/indicator/Next arrows sit on the left of the same line as the icon buttons and Speak/Pause (right), with Stop alone on the line below; on a narrow card, the icon buttons/Speak move to their own line, and the arrows (left) and Stop (right) share the line below that. Uses a CSS container query keyed to the card's own width (not the browser window), so it responds correctly regardless of how big the dashboard itself is.
 - Chunks could still occasionally get cut off in their last second or two even with the estimated-duration floor from `2026.09.17.4` - the estimate itself was in the right ballpark, it just didn't leave quite enough margin right at the tail end. Raised the "not playing" confirmation window (1.8s -> 3s) and gave the per-chunk duration estimate a bit more headroom.
